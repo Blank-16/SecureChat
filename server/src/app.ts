@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from "express";
 import { corsMiddleware } from "./middleware/cors";
 import { errorHandler } from "./middleware/errorHandler";
+import { authRouter } from "./routes/auth";
 
 const MAX_BODY_SIZE = 65_536; // 64KB
 
@@ -19,6 +20,8 @@ app.use(corsMiddleware);
 app.options("*", (_req: Request, res: Response) => {
   res.sendStatus(204);
 });
+
+app.use("/auth", authRouter);
 
 app.get("/", (_req: Request, res: Response) => {
   res.send("SecureChat Server...");
