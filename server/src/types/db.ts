@@ -1,7 +1,7 @@
 export interface DbUser {
   id: number;
   username: string;
-  publickey: string;
+  publicKey: string;
   createdAt: string;
 }
 
@@ -18,7 +18,7 @@ export interface DbMessage {
   receiverId: number;
   ciphertext: string;
   senderCiphertext: string;
-  timeStamp: string;
+  timestamp: string;
 }
 
 export interface ConnectedUser {
