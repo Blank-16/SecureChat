@@ -14,6 +14,7 @@ import {
   buildClearCookieHeader,
   COOKIE_NAME,
 } from "../cookies";
+import { DbUser } from "../types/db";
 
 export const authRouter = Router();
 
@@ -32,29 +33,41 @@ authRouter.post("/register", (req: Request, res: Response) => {
   }
 
   const existing = getUserByUsername(username);
+
+  // Prevent hijacking if the user is currently online
   if (existing && hasActiveSession(existing.id)) {
-    res.status(409).json({ error: "username taken" });
+    res.status(409).json({ error: "username is already active" });
     return;
   }
 
-  let user = existing;
+  let user: DbUser | undefined = existing;
+
   if (!user) {
-    user = createUser(username, publicKey) ?? undefined;
-    if (!user) {
-      res.status(409).json({ error: "Username taken" });
+    // New user registration path
+    const result = createUser(username, publicKey);
+    if (!result.success) {
+      res.status(result.error === "ALREADY_EXISTS" ? 409 : 500).json({ 
+        error: result.error === "ALREADY_EXISTS" ? "username taken" : "database error" 
+      });
       return;
     }
+    user = result.data;
   } else {
-    user = createUser(username, publicKey) ?? existing;
-  }
-
-  if (!user) {
-    res.status(500).json({ error: "failed to create user" });
-    return;
+    // Login path for existing users: verify public key
+    if (user.publicKey !== publicKey) {
+      res.status(401).json({ error: "public key mismatch" });
+      return;
+    }
   }
 
   const token = randomUUID();
-  createSession(user.id, token);
+  const sessionResult = createSession(user.id, token);
+
+  // Handle session creation failures (e.g. DB locks or collisions)
+  if (!sessionResult.success) {
+    res.status(500).json({ error: "failed to create session" });
+    return;
+  }
 
   res.setHeader("Set-Cookie", buildSetCookieHeader(token));
   res.status(200).json({ userId: user.id, username: user.username });
@@ -78,6 +91,7 @@ authRouter.get("/me", (req: Request, res: Response) => {
     return;
   }
 
+  // Validate session and automatically handle expiration via getSessionByToken
   const session = getSessionByToken(token);
   if (!session) {
     res.status(401).json({ error: "invalid session" });
