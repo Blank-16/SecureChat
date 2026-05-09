@@ -155,6 +155,18 @@ export function hasActiveSession(userId: number): boolean {
   return validSessions.length > 0;
 }
 
+export function purgeExpiredSessions(): void {
+  const now = Date.now();
+  const ttlMs = SESSION_TTL_DAYS * 86_400_000;
+  // This is a more efficient bulk delete based on timestamp
+  // We use datetime('now', '-N days') to match the createdAt format if needed, 
+  // but since we store ISO-ish strings, simple comparison works.
+  db.prepare(`
+    DELETE FROM sessions 
+    WHERE (strftime('%s', 'now') - strftime('%s', createdAt)) > ?
+  `).run(SESSION_TTL_DAYS * 86_400);
+}
+
 export function saveMessage(
   senderId: number,
   receiverId: number,
