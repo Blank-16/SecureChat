@@ -79,6 +79,10 @@ export interface ErrorPayload {
   message: string;
 }
 
+export interface MessageAckPayload {
+  id: number;
+}
+
 export type ClientMessage =
   | { type: "register"; payload: RegisterPayload }
   | { type: "send_message"; payload: SendMessagePayload }
@@ -95,4 +99,5 @@ export type ServerMessage =
   | { type: "user_status"; payload: UserStatusPayload }
   | { type: "public_key"; payload: PublicKeyPayload }
   | { type: "typing"; payload: TypingServerPayload }
-  | { type: "error"; payload: ErrorPayload };
+  | { type: "error"; payload: ErrorPayload }
+  | { type: "message_ack"; payload: MessageAckPayload };
