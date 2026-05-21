@@ -8,7 +8,7 @@ interface TypingStore {
 }
 
 const typingTimeouts: Record<string, any> = {};
-const TYPING_AUTO_EXPIRE_MS = 3500;
+const TYPING_AUTO_EXPIRE_MS = 2500;
 
 export const useTypingStore = create<TypingStore>()(
   immer((set, get) => ({
