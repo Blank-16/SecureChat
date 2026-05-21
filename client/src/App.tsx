@@ -1,6 +1,11 @@
+import { Toaster } from "./components/Toaster";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 export default function App() {
+
   return (
-    <div>App</div>
-  )
+    <ErrorBoundary>
+      <Toaster />
+    </ErrorBoundary>
+  );
 }
