@@ -13,10 +13,10 @@ export interface Message {
   plaintext?: string;
   timestamp: string;
   decryptError?: boolean;
-  sendStatus: sendStatus;
+  sendStatus?: SendStatus;
 }
 
-export type sendStatus = "sending" | "send" | "failed";
+export type SendStatus = "sending" | "send" | "failed";
 export type ConnectionStatus =
   | "connecting"
   | "connected"
