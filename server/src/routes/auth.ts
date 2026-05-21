@@ -6,6 +6,7 @@ import {
   deleteSession,
   getSessionByToken,
   hasActiveSession,
+  getUserById,
 } from "../db";
 import { randomUUID } from "crypto";
 import {
@@ -46,8 +47,11 @@ authRouter.post("/register", (req: Request, res: Response) => {
     // New user registration path
     const result = createUser(username, publicKey);
     if (!result.success) {
-      res.status(result.error === "ALREADY_EXISTS" ? 409 : 500).json({ 
-        error: result.error === "ALREADY_EXISTS" ? "username taken" : "database error" 
+      res.status(result.error === "ALREADY_EXISTS" ? 409 : 500).json({
+        error:
+          result.error === "ALREADY_EXISTS"
+            ? "username taken"
+            : "database error",
       });
       return;
     }
@@ -98,5 +102,8 @@ authRouter.get("/me", (req: Request, res: Response) => {
     return;
   }
 
-  res.status(200).json({ userId: session.userId });
+  const user = getUserById(session.userId);
+  if (!user) return res.status(401).json({ error: "user not found" });
+
+  res.status(200).json({ userId: session.userId, username: user.username });
 });

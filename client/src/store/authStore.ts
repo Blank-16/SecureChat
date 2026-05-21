@@ -39,11 +39,14 @@ export const useAuthStore = create<AuthStore>()(
     },
 
     logout: async () => {
-      await fetch(`${API_URL}/auth/logout`, {
-        method: "POST",
-        credentials: "include",
-      });
-      localStorage.removeItem("sc_username");
+      try {
+        await fetch(`${API_URL}/auth/logout`, {
+          method: "POST",
+          credentials: "include",
+        });
+      } catch (err) {
+        console.error("Logout request failed:", err);
+      }
       set((s) => {
         s.authState = "unauthenticated";
         s.username = "";
@@ -55,23 +58,18 @@ export const useAuthStore = create<AuthStore>()(
           credentials: "include",
         });
         if (res.ok) {
-          const stored = localStorage.getItem("sc_username");
-          if (stored) {
-            set((s) => {
-              s.authState = "authenticated";
-              s.username = stored;
-            });
-          } else {
-            set((s) => {
-              s.authState = "authenticated";
-            });
-          }
+          const data = await res.json();
+          set((s) => {
+            s.authState = "authenticated";
+            s.username = data.username;
+          });
         } else {
           set((s) => {
             s.authState = "unauthenticated";
           });
         }
-      } catch {
+      } catch (err) {
+        console.error("Session check failed:", err);
         set((s) => {
           s.authState = "unauthenticated";
         });
