@@ -28,31 +28,42 @@ export async function generateKeyPair(): Promise<CryptoKeyPair> {
   );
 }
 
-export async function exportPublicKey(key: CryptoKey): Promise<string> {
-  const buf = await crypto.subtle.exportKey("spki", key);
-  const uint8 = new Uint8Array(buf);
-
-  // Safe conversion regardless of buffer size
+function uint8ToBase64(uint8: Uint8Array): string {
+  // Use a more memory-efficient approach for large buffers
   let binary = "";
-  for (let i = 0; i < uint8.length; i++) {
+  const len = uint8.byteLength;
+  for (let i = 0; i < len; i++) {
     binary += String.fromCharCode(uint8[i]);
   }
-
   return btoa(binary);
 }
 
-export async function importPublicKey(b64: string): Promise<CryptoKey> {
-  const buf = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  return crypto.subtle.importKey(
-    "spki",
-    buf,
-    {
-      name: ALGORITHM,
-      hash: HASH,
-    },
-    false,
-    KEY_USAGES_PUBLIC,
-  );
+function base64ToUint8(b64: string): Uint8Array {
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+export async function exportPublicKey(key: CryptoKey): Promise<string> {
+  const buf = await crypto.subtle.exportKey("spki", key);
+  return uint8ToBase64(new Uint8Array(buf));
+}
+
+export async function importPublicKey(b64: string): Promise<CryptoKey | null> {
+  try {
+    const buf = base64ToUint8(b64);
+    return await crypto.subtle.importKey(
+      "spki",
+      buf,
+      {
+        name: ALGORITHM,
+        hash: HASH,
+      },
+      false,
+      KEY_USAGES_PUBLIC,
+    );
+  } catch (err) {
+    console.error("Failed to import public key:", err);
+    return null;
+  }
 }
 
 export async function encrypt(
@@ -65,27 +76,25 @@ export async function encrypt(
     publicKey,
     encoded,
   );
-
-  const uint8 = new Uint8Array(buf);
-  let binary = "";
-  for (let i = 0; i < uint8.length; i++) {
-    binary += String.fromCharCode(uint8[i]);
-  }
-
-  return btoa(binary);
+  return uint8ToBase64(new Uint8Array(buf));
 }
 
 export async function decrypt(
   ciphertext: string,
   privateKey: CryptoKey,
-): Promise<string> {
-  const buf = Uint8Array.from(atob(ciphertext), (c) => c.charCodeAt(0));
-  const decoded = await crypto.subtle.decrypt(
-    { name: ALGORITHM },
-    privateKey,
-    buf,
-  );
-  return new TextDecoder().decode(decoded);
+): Promise<string | null> {
+  try {
+    const buf = base64ToUint8(ciphertext);
+    const decoded = await crypto.subtle.decrypt(
+      { name: ALGORITHM },
+      privateKey,
+      buf,
+    );
+    return new TextDecoder().decode(decoded);
+  } catch (err) {
+    console.error("Decryption failed:", err);
+    return null;
+  }
 }
 
 export async function persistKeyPair(pair: CryptoKeyPair): Promise<void> {
