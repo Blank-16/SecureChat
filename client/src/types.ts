@@ -24,7 +24,7 @@ export type ConnectionStatus =
   | "error";
 export type AuthState = "checking" | "unauthenticated" | "authenticated";
 
-export interface ServerEnevelop {
+export interface ServerEnvelope {
   type: string;
   payload: Record<string, unknown>;
 }
