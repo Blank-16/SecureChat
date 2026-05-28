@@ -16,6 +16,7 @@ db.exec(`
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
+        displayName TEXT NOT NULL DEFAULT '',
         publicKey TEXT NOT NULL,
         createdAt TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -41,7 +42,37 @@ db.exec(`
 
     CREATE INDEX IF NOT EXISTS idx_sessions_token
         ON sessions(token);
+
+    CREATE TABLE IF NOT EXISTS challenges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        nonce TEXT NOT NULL,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS contacts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        contactId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(userId, contactId)
+    );
+
+    CREATE TABLE IF NOT EXISTS blocks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        blockerId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        blockedId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(blockerId, blockedId)
+    );
 `);
+
+try {
+  db.exec("ALTER TABLE users ADD COLUMN displayName TEXT NOT NULL DEFAULT ''");
+} catch {
+  // Ignored, column probably exists
+}
+
 
 export type DbError = "ALREADY_EXISTS" | "DATABASE_ERROR" | "NOT_FOUND";
 
@@ -51,15 +82,16 @@ export type DbResult<T> =
 
 export function createUser(
   username: string,
+  displayName: string,
   publicKey: string,
 ): DbResult<DbUser> {
   try {
     const user = db
       .prepare<
-        [string, string],
+        [string, string, string],
         DbUser
-      >("INSERT INTO users (username, publicKey) VALUES (?, ?) RETURNING *")
-      .get(username, publicKey);
+      >("INSERT INTO users (username, displayName, publicKey) VALUES (?, ?, ?) RETURNING *")
+      .get(username, displayName, publicKey);
 
     if (!user) return { success: false, error: "DATABASE_ERROR" };
     return { success: true, data: user };
@@ -209,4 +241,97 @@ export function getConversation(
     )
     .all(userAId, userBId, userBId, userAId, limit)
     .reverse();
+}
+
+export function saveChallenge(username: string, nonce: string): void {
+  db.prepare<[string, string], void>(`
+    INSERT INTO challenges (username, nonce)
+    VALUES (?, ?)
+    ON CONFLICT(username) DO UPDATE SET nonce = excluded.nonce, createdAt = datetime('now')
+  `).run(username, nonce);
+}
+
+export function getChallenge(username: string): string | undefined {
+  const row = db.prepare<[string], {nonce: string, createdAt: string}>(
+    "SELECT nonce, createdAt FROM challenges WHERE username = ?"
+  ).get(username);
+  
+  if (!row) return undefined;
+  
+  const createdAt = new Date(row.createdAt + "Z").getTime();
+  if (Date.now() - createdAt > 5 * 60 * 1000) {
+    deleteChallenge(username);
+    return undefined;
+  }
+  
+  return row.nonce;
+}
+
+export function deleteChallenge(username: string): void {
+  db.prepare<[string], void>("DELETE FROM challenges WHERE username = ?").run(username);
+}
+
+// --- Contacts & Blocks ---
+
+export function addContact(userId: number, contactId: number): void {
+  db.prepare(`
+    INSERT INTO contacts (userId, contactId) VALUES (?, ?)
+    ON CONFLICT DO NOTHING
+  `).run(userId, contactId);
+}
+
+export function removeContact(userId: number, contactId: number): void {
+  db.prepare("DELETE FROM contacts WHERE userId = ? AND contactId = ?").run(userId, contactId);
+}
+
+export function getContactsForUser(userId: number): DbUser[] {
+  return db.prepare<[number], DbUser>(`
+    SELECT u.* FROM users u
+    JOIN contacts c ON u.id = c.contactId
+    WHERE c.userId = ?
+  `).all(userId);
+}
+
+export function getUsersWhoAdded(contactId: number): DbUser[] {
+  return db.prepare<[number], DbUser>(`
+    SELECT u.* FROM users u
+    JOIN contacts c ON u.id = c.userId
+    WHERE c.contactId = ?
+  `).all(contactId);
+}
+
+export function blockUser(blockerId: number, blockedId: number): void {
+  db.prepare(`
+    INSERT INTO blocks (blockerId, blockedId) VALUES (?, ?)
+    ON CONFLICT DO NOTHING
+  `).run(blockerId, blockedId);
+  // Remove from contacts if blocked
+  db.prepare("DELETE FROM contacts WHERE userId = ? AND contactId = ?").run(blockerId, blockedId);
+}
+
+export function unblockUser(blockerId: number, blockedId: number): void {
+  db.prepare("DELETE FROM blocks WHERE blockerId = ? AND blockedId = ?").run(blockerId, blockedId);
+}
+
+export function isBlocked(blockerId: number, blockedId: number): boolean {
+  const row = db.prepare<[number, number], { id: number }>(`
+    SELECT id FROM blocks WHERE blockerId = ? AND blockedId = ?
+  `).get(blockerId, blockedId);
+  return !!row;
+}
+
+export function getBlockedUsers(userId: number): DbUser[] {
+  return db.prepare<[number], DbUser>(`
+    SELECT u.* FROM users u
+    JOIN blocks b ON u.id = b.blockedId
+    WHERE b.blockerId = ?
+  `).all(userId);
+}
+
+export function deleteConversation(userAId: number, userBId: number): void {
+  db.prepare(`
+    DELETE FROM messages
+    WHERE (senderId = ? AND receiverId = ?)
+       OR (senderId = ? AND receiverId = ?)
+  `).run(userAId, userBId, userBId, userAId);
 }

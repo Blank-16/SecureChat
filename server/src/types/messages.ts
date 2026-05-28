@@ -25,6 +25,7 @@ export interface RequestPublicKeyPayload {
 export interface RegisteredPayload {
   userId: number;
   username: string;
+  displayName: string;
 }
 
 export interface MessagePayload {
@@ -51,17 +52,20 @@ export interface HistoryPayload {
 export interface UserItem {
   id: number;
   username: string;
+  displayName: string;
   publicKey: string;
   online: boolean;
 }
 
-export interface UsersPayload {
-  users: UserItem[];
+export interface ContactsPayload {
+  contacts: UserItem[];
+  blocked: UserItem[];
 }
 
 export interface UserStatusPayload {
   userId: number;
   username: string;
+  displayName: string;
   online: boolean;
 }
 
@@ -83,21 +87,33 @@ export interface MessageAckPayload {
   id: number;
 }
 
+export interface AddContactPayload { username: string; }
+export interface BlockUserPayload { username: string; }
+export interface DeleteChatPayload { username: string; }
+
 export type ClientMessage =
   | { type: "register"; payload: RegisterPayload }
   | { type: "send_message"; payload: SendMessagePayload }
   | { type: "get_history"; payload: GetHistoryPayload }
-  | { type: "get_users"; payload: Record<string, never> }
+  | { type: "get_contacts"; payload: Record<string, never> }
+  | { type: "add_contact"; payload: AddContactPayload }
+  | { type: "remove_contact"; payload: AddContactPayload }
+  | { type: "block_user"; payload: BlockUserPayload }
+  | { type: "unblock_user"; payload: BlockUserPayload }
+  | { type: "delete_chat"; payload: DeleteChatPayload }
   | { type: "typing"; payload: TypingPayload }
   | { type: "request_public_key"; payload: RequestPublicKeyPayload };
+
+export interface DeleteChatServerPayload { with: string; }
 
 export type ServerMessage =
   | { type: "registered"; payload: RegisteredPayload }
   | { type: "message"; payload: MessagePayload }
   | { type: "history"; payload: HistoryPayload }
-  | { type: "users"; payload: UsersPayload }
+  | { type: "contacts"; payload: ContactsPayload }
   | { type: "user_status"; payload: UserStatusPayload }
   | { type: "public_key"; payload: PublicKeyPayload }
   | { type: "typing"; payload: TypingServerPayload }
   | { type: "error"; payload: ErrorPayload }
-  | { type: "message_ack"; payload: MessageAckPayload };
+  | { type: "message_ack"; payload: MessageAckPayload }
+  | { type: "chat_deleted"; payload: DeleteChatServerPayload };

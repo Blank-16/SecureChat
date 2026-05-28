@@ -1,6 +1,7 @@
 export interface DbUser {
   id: number;
   username: string;
+  displayName: string;
   publicKey: string;
   createdAt: string;
 }
@@ -24,4 +25,5 @@ export interface DbMessage {
 export interface ConnectedUser {
   userId: number;
   username: string;
+  displayName: string;
 }

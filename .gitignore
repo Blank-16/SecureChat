@@ -4,3 +4,5 @@ dist/
 *.db-shm
 *.db-wal
 .env
+.antigravitycli/
+*_log.txt

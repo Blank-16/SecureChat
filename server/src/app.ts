@@ -17,7 +17,7 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use(corsMiddleware);
 
-app.options("*", (_req: Request, res: Response) => {
+app.options(/.*/, (_req: Request, res: Response) => {
   res.sendStatus(204);
 });
 
