@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import { RegisterPayload, RequestPublicKeyPayload } from "../../types/messages";
 import { getUserByUsername, createUser } from "../../db";
-import { connections, typingState, send, broadcast, findSocketByUserId } from "./utils";
+import { connections, typingState, send, broadcastToSubscribers, findSocketByUserId } from "./utils";
 
 // Handles user registration and notifies others of online status.
 export function handleRegister(ws: WebSocket, payload: RegisterPayload): void {
@@ -79,8 +79,8 @@ export function handleDisconnect(ws: WebSocket): void {
   }
 
   connections.delete(ws);
-  broadcast({
+  broadcastToSubscribers(user.userId, {
     type: "user_status",
-    payload: { userId: user.userId, username: user.username, online: false },
+    payload: { userId: user.userId, username: user.username, displayName: user.displayName, online: false },
   });
 }
