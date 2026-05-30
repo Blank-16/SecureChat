@@ -1,7 +1,7 @@
 import { IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { getSessionTokenFromRequest } from "./cookies";
-import { send, connections, broadcast } from "./ws/handlers/utils";
+import { send, connections, broadcast, broadcastToSubscribers } from "./ws/handlers/utils";
 import { getSessionByToken, getUserById, purgeExpiredSessions } from "./db";
 import { checkRateLimit, clearRateBucket } from "./ws/rateLimit";
 import { ClientMessage } from "./types/messages";
@@ -9,8 +9,15 @@ import {
   handleGetHistory,
   handleSendMessage,
   handleTyping,
+  handleDeleteChat,
 } from "./ws/handlers/chat";
-import { handleGetUsers } from "./ws/handlers/users";
+import {
+  handleGetContacts,
+  handleAddContact,
+  handleRemoveContact,
+  handleBlockUser,
+  handleUnblockUser
+} from "./ws/handlers/contacts";
 import { handleRequestPublicKey } from "./ws/handlers/auth";
 import { handleDisconnect } from "./ws/handlers";
 
@@ -92,11 +99,12 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
       payload: { userId: user.id, username: user.username },
     });
 
-    // Broadcast user status
-    broadcast(
+    // Broadcast user status to mutuals
+    broadcastToSubscribers(
+      user.id,
       {
         type: "user_status",
-        payload: { userId: user.id, username: user.username, online: true },
+        payload: { userId: user.id, username: user.username, displayName: user.displayName, online: true },
       },
       ws,
     );
@@ -137,8 +145,33 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
             handleGetHistory(ws, parsed.payload);
           }
           break;
-        case "get_users":
-          handleGetUsers(ws);
+        case "get_contacts":
+          handleGetContacts(ws);
+          break;
+        case "add_contact":
+          if (parsed.payload?.username) {
+            handleAddContact(ws, parsed.payload);
+          }
+          break;
+        case "remove_contact":
+          if (parsed.payload?.username) {
+            handleRemoveContact(ws, parsed.payload);
+          }
+          break;
+        case "block_user":
+          if (parsed.payload?.username) {
+            handleBlockUser(ws, parsed.payload);
+          }
+          break;
+        case "unblock_user":
+          if (parsed.payload?.username) {
+            handleUnblockUser(ws, parsed.payload);
+          }
+          break;
+        case "delete_chat":
+          if (parsed.payload?.username) {
+            handleDeleteChat(ws, parsed.payload);
+          }
           break;
         case "typing":
           if (typeof parsed.payload?.isTyping === "boolean") {

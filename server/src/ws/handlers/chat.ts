@@ -1,6 +1,6 @@
 import { WebSocket } from "ws";
-import { SendMessagePayload, GetHistoryPayload, TypingPayload } from "../../types/messages";
-import { getUserByUsername, saveMessage, getConversation } from "../../db";
+import { SendMessagePayload, GetHistoryPayload, TypingPayload, DeleteChatPayload } from "../../types/messages";
+import { getUserByUsername, saveMessage, getConversation, isBlocked, deleteConversation } from "../../db";
 import { connections, typingState, send, findSocketByUserId } from "./utils";
 
 // Saves and forwards an encrypted message to the recipient.
@@ -17,6 +17,11 @@ export function handleSendMessage(
   const receiver = getUserByUsername(payload.to);
   if (!receiver) {
     send(ws, { type: "error", payload: { message: "recipient not found " } });
+    return;
+  }
+
+  if (isBlocked(receiver.id, sender.userId)) {
+    send(ws, { type: "error", payload: { message: "recipient unavailable" } });
     return;
   }
 
@@ -124,6 +129,29 @@ export function handleTyping(ws: WebSocket, payload: TypingPayload): void {
         from: sender.username,
         isTyping: payload.isTyping,
       },
+    });
+  }
+}
+
+export function handleDeleteChat(ws: WebSocket, payload: DeleteChatPayload): void {
+  const sender = connections.get(ws);
+  if (!sender) return;
+
+  const receiver = getUserByUsername(payload.username);
+  if (!receiver) return;
+
+  deleteConversation(sender.userId, receiver.id);
+
+  send(ws, {
+    type: "chat_deleted",
+    payload: { with: receiver.username }
+  });
+
+  const receiverWs = findSocketByUserId(receiver.id);
+  if (receiverWs) {
+    send(receiverWs, {
+      type: "chat_deleted",
+      payload: { with: sender.username }
     });
   }
 }

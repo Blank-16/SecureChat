@@ -22,6 +22,18 @@ export function broadcast(msg: ServerMessage, exclude?: WebSocket): void {
   }
 }
 
+import { getUsersWhoAdded } from "../../db";
+
+// Broadcasts a message only to clients who have the targetUserId in their contacts
+export function broadcastToSubscribers(targetUserId: number, msg: ServerMessage, exclude?: WebSocket): void {
+  const subscribers = getUsersWhoAdded(targetUserId).map(u => u.id);
+  for (const [client, user] of connections) {
+    if (client !== exclude && subscribers.includes(user.userId)) {
+      send(client, msg);
+    }
+  }
+}
+
 // Finds the WebSocket instance for a specific user ID.
 export function findSocketByUserId(userId: number): WebSocket | undefined {
   for (const [ws, user] of connections) {
