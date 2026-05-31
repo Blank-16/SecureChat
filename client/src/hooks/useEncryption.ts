@@ -2,6 +2,7 @@ import {
   importPublicKey,
   encrypt,
   decrypt,
+  decryptRSA,
 } from "../utils/crypto";
 import { useCryptoStore } from "../store/cryptoStore";
 
@@ -12,6 +13,7 @@ interface UseEncryptionReturn {
     recipientPublicKeyB64: string,
   ) => Promise<string>;
   decryptOwn: (ciphertext: string) => Promise<string>;
+  decryptChallenge: (ciphertextB64: string) => Promise<string>;
   ready: boolean;
   initialize: (passphrase: string) => Promise<void>;
   clearKeys: () => void;
@@ -33,10 +35,16 @@ export function useEncryption(): UseEncryptionReturn {
     return decrypt(ciphertext, privateKey);
   }
 
+  async function decryptChallenge(ciphertextB64: string): Promise<string> {
+    if (!privateKey) throw new Error("keys not ready");
+    return decryptRSA(ciphertextB64, privateKey);
+  }
+
   return {
     publicKeyB64,
     encryptFor,
     decryptOwn,
+    decryptChallenge,
     ready,
     initialize,
     clearKeys: clear,

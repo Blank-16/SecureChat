@@ -1,6 +1,7 @@
 export interface User {
   id: number;
   username: string;
+  displayName: string;
   publicKey: string;
   online: boolean;
 }

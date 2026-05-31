@@ -134,3 +134,24 @@ export async function decrypt(
     );
   }
 }
+
+/**
+ * Decrypts a simple RSA-OAEP ciphertext.
+ * Used for decrypting challenge nonces during authentication.
+ */
+export async function decryptRSA(
+  ciphertextB64: string,
+  privateKey: CryptoKey,
+): Promise<string> {
+  try {
+    const ciphertextBuf = base64ToUint8(ciphertextB64);
+    const decryptedBuf = await crypto.subtle.decrypt(
+      { name: RSA_ALGORITHM },
+      privateKey,
+      ciphertextBuf
+    );
+    return new TextDecoder().decode(decryptedBuf);
+  } catch (err) {
+    throw new CryptoError("RSA Decryption failed", { cause: err });
+  }
+}

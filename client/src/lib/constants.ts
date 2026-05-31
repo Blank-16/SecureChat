@@ -9,7 +9,7 @@ if (!wsUrl) {
   throw new Error("VITE_WS_URL is not set. Add it to your .env file.");
 }
 
-export const WS_URL = wsUrl;
+export const WS_URL = wsUrl.replace(/^http/, "ws");
 export const RECONNECT_DELAY_MS = 3000;
 export const TYPING_DEBOUNCE_MS = 1500;
 export const KEY_FETCH_RETRIES = 8;
