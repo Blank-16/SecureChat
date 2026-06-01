@@ -6,8 +6,9 @@ import { API_URL } from "../lib/constants";
 interface AuthStore {
   authState: AuthState;
   username: string;
+  displayName: string;
   setChecking: () => void;
-  setAuthenticated: (username: string) => void;
+  setAuthenticated: (username: string, displayName: string) => void;
   setUnauthenticated: () => void;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
@@ -17,6 +18,7 @@ export const useAuthStore = create<AuthStore>()(
   immer((set) => ({
     authState: "checking",
     username: "",
+    displayName: "",
 
     setChecking: () => {
       set((s) => {
@@ -24,10 +26,11 @@ export const useAuthStore = create<AuthStore>()(
       });
     },
 
-    setAuthenticated: (username) => {
+    setAuthenticated: (username, displayName) => {
       set((s) => {
         s.authState = "authenticated";
         s.username = username;
+        s.displayName = displayName;
       });
     },
 
@@ -35,6 +38,7 @@ export const useAuthStore = create<AuthStore>()(
       set((s) => {
         s.authState = "unauthenticated";
         s.username = "";
+        s.displayName = "";
       });
     },
 
@@ -50,6 +54,7 @@ export const useAuthStore = create<AuthStore>()(
       set((s) => {
         s.authState = "unauthenticated";
         s.username = "";
+        s.displayName = "";
       });
     },
     checkSession: async () => {
@@ -62,6 +67,7 @@ export const useAuthStore = create<AuthStore>()(
           set((s) => {
             s.authState = "authenticated";
             s.username = data.username;
+            s.displayName = data.displayName;
           });
         } else {
           set((s) => {
