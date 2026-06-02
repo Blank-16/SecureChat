@@ -3,7 +3,7 @@ import type { ConnectionStatus, ServerEnvelope, Message, User } from "../types";
 import { WS_URL, RECONNECT_DELAY_MS } from "../lib/constants";
 import { useAuthStore } from "../store/authStore";
 import { useChatStore } from "../store/chatStore";
-import { useUsersStore } from "../store/usersStore";
+import { useContactsStore } from "../store/contactsStore";
 import { useTypingStore } from "../store/typingStore";
 import { useUiStore } from "../store/uiStore";
 
@@ -20,6 +20,11 @@ export interface UseWebSocketReturn {
   requestPublicKey: (username: string) => void;
   sendTyping: (to: string, isTyping: boolean) => void;
   setPublicKeyHandler: (handler: PublicKeyHandler) => void;
+  addContact: (username: string) => void;
+  removeContact: (username: string) => void;
+  blockUser: (username: string) => void;
+  unblockUser: (username: string) => void;
+  deleteChat: (username: string) => void;
 }
 
 export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
@@ -56,7 +61,8 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
       switch (type) {
         case "registered": {
           const p = payload as { userId: number; username: string };
-          useAuthStore.getState().setAuthenticated(p.username);
+          useAuthStore.getState().setAuthenticated(p.username, (p as any).displayName || "");
+          sendRaw({ type: "get_contacts" });
           if (activeConversationRef.current) {
             ws.send(
               JSON.stringify({
@@ -71,12 +77,21 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           const p = payload as unknown as Message;
           const self = useAuthStore.getState().username;
           const peer = p.from === self ? p.to : p.from;
-          useChatStore.getState().append(peer, p);
-          if (
-            p.from !== self &&
-            useUiStore.getState().selectedUser !== p.from
-          ) {
-            useUsersStore.getState().incrementUnread(p.from);
+          
+          if (p.from === self) {
+            // Echo from server: confirm the pending optimistic message
+            const msgs = useChatStore.getState().getMessages(peer);
+            const pendingMsg = msgs.find(m => m.id < 0 && m.sendStatus === "sending");
+            if (pendingMsg) {
+              p.plaintext = pendingMsg.plaintext;
+              p.sendStatus = "send" as const;
+              useChatStore.getState().confirm(peer, pendingMsg.id, p);
+            }
+          } else {
+            useChatStore.getState().append(peer, p);
+            if (useUiStore.getState().selectedUser !== p.from) {
+              useContactsStore.getState().incrementUnread(p.from);
+            }
           }
           break;
         }
@@ -85,20 +100,20 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           useChatStore.getState().setHistory(p.with, p.messages);
           break;
         }
-        case "users": {
-          const p = payload as { users: User[] };
-          useUsersStore.getState().setUsers(p.users);
+        case "contacts": {
+          const p = payload as { contacts: User[]; blocked: User[] };
+          useContactsStore.getState().setContacts(p.contacts);
+          useContactsStore.getState().setBlocked(p.blocked);
           break;
         }
         case "user_status": {
           const p = payload as {
             userId: number;
             username: string;
+            displayName: string;
             online: boolean;
           };
-          useUsersStore
-            .getState()
-            .updateUserStatus(p.userId, p.username, p.online);
+          useContactsStore.getState().updateContactStatus(p.username, p.online);
           break;
         }
         case "public_key": {
@@ -109,6 +124,11 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
         case "typing": {
           const p = payload as { from: string; isTyping: boolean };
           useTypingStore.getState().setTyping(p.from, p.isTyping);
+          break;
+        }
+        case "chat_deleted": {
+          const p = payload as { with: string };
+          useChatStore.getState().setHistory(p.with, []);
           break;
         }
         case "error": {
@@ -164,5 +184,10 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
     setPublicKeyHandler: (handler: PublicKeyHandler) => {
       publicKeyHandlerRef.current = handler;
     },
+    addContact: (username) => sendRaw({ type: "add_contact", payload: { username } }),
+    removeContact: (username) => sendRaw({ type: "remove_contact", payload: { username } }),
+    blockUser: (username) => sendRaw({ type: "block_user", payload: { username } }),
+    unblockUser: (username) => sendRaw({ type: "unblock_user", payload: { username } }),
+    deleteChat: (username) => sendRaw({ type: "delete_chat", payload: { username } }),
   }), [status, sendRaw]);
 }
