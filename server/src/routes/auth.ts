@@ -1,27 +1,12 @@
 import { Router, type Request, type Response } from "express";
-import {
-  createUser,
-  getUserByUsername,
-  createSession,
-  deleteSession,
-  getSessionByToken,
-  hasActiveSession,
-  getUserById,
-  saveChallenge,
-  getChallenge,
-  deleteChallenge,
-} from "../db";
-import { randomUUID, randomBytes } from "crypto";
-import { publicEncrypt, constants } from "crypto";
-import {
-  parseCookies,
-  buildSetCookieHeader,
-  buildClearCookieHeader,
-  COOKIE_NAME,
-} from "../cookies";
-import { DbUser } from "../types/db";
+import { createUser, getUserByUsername, createSession, deleteSession, getSessionByToken, getUserById, saveChallenge, getChallenge, deleteChallenge } from "../db";
+import { randomUUID, randomBytes, publicEncrypt, constants, createPublicKey, timingSafeEqual } from "crypto";
+import { parseCookies, buildSetCookieHeader, buildClearCookieHeader, COOKIE_NAME } from "../cookies";
 
 export const authRouter = Router();
+
+const MAX_DISPLAY_NAME_LEN = 64;
+const MAX_PUBLIC_KEY_LEN = 4096;
 
 authRouter.post("/register", (req: Request, res: Response) => {
   const username = (req.body?.username as string | undefined)?.trim();
@@ -32,21 +17,33 @@ authRouter.post("/register", (req: Request, res: Response) => {
     res.status(400).json({ error: "username, displayName, and publicKey required" });
     return;
   }
-
   if (!/^[a-zA-Z0-9_-]{2,24}$/.test(username)) {
     res.status(400).json({ error: "invalid username format" });
     return;
   }
+  if (displayName.length > MAX_DISPLAY_NAME_LEN) {
+    res.status(400).json({ error: `displayName must be at most ${MAX_DISPLAY_NAME_LEN} characters` });
+    return;
+  }
+  if (publicKey.length > MAX_PUBLIC_KEY_LEN || !/^[A-Za-z0-9+/=]+$/.test(publicKey)) {
+    res.status(400).json({ error: "invalid publicKey format" });
+    return;
+  }
 
-  const existing = getUserByUsername(username);
-  if (existing) {
-    res.status(409).json({ error: "username taken" });
+  try {
+    createPublicKey({ key: Buffer.from(publicKey, "base64"), format: "der", type: "spki" });
+  } catch {
+    res.status(400).json({ error: "invalid publicKey: not a valid SPKI key" });
     return;
   }
 
   const result = createUser(username, displayName, publicKey);
   if (!result.success) {
-    res.status(500).json({ error: "database error" });
+    if (result.error === "ALREADY_EXISTS") {
+      res.status(409).json({ error: "username taken" });
+    } else {
+      res.status(500).json({ error: "database error" });
+    }
     return;
   }
 
@@ -72,38 +69,25 @@ authRouter.post("/challenge", (req: Request, res: Response) => {
 
   const user = getUserByUsername(username);
   if (!user) {
-    res.status(404).json({ error: "user not found" });
-    return;
-  }
-
-  if (hasActiveSession(user.id)) {
-    res.status(409).json({ error: "username is already active" });
+    res.status(401).json({ error: "invalid credentials" });
     return;
   }
 
   const nonce = randomBytes(32).toString("base64");
-  saveChallenge(username, nonce);
 
   try {
-    const keyObj = {
-      key: Buffer.from(user.publicKey, "base64"),
-      format: "der" as const,
-      type: "spki" as const,
-    };
-    
-    // Explicitly using RSA-OAEP with SHA-256 to match Web Crypto API settings
     const encryptedBuffer = publicEncrypt(
       {
-        ...keyObj,
+        key: createPublicKey({ key: Buffer.from(user.publicKey, "base64"), format: "der", type: "spki" }),
         padding: constants.RSA_PKCS1_OAEP_PADDING,
         oaepHash: "sha256",
       },
       Buffer.from(nonce, "utf8")
     );
-    
+    saveChallenge(username, nonce);
     res.status(200).json({ encryptedNonce: encryptedBuffer.toString("base64") });
   } catch (err) {
-    console.error("Encryption error:", err);
+    console.error("Challenge generation error:", err);
     res.status(500).json({ error: "failed to generate challenge" });
   }
 });
@@ -123,21 +107,18 @@ authRouter.post("/login", (req: Request, res: Response) => {
     return;
   }
 
-  if (hasActiveSession(user.id)) {
-    res.status(409).json({ error: "username is already active" });
-    return;
-  }
-
   const storedNonce = getChallenge(username);
   if (!storedNonce) {
     res.status(401).json({ error: "challenge expired or not found" });
     return;
   }
 
-  // Prevent replay attacks
   deleteChallenge(username);
 
-  if (storedNonce !== decryptedNonce) {
+  const a = Buffer.from(storedNonce);
+  const b = Buffer.from(decryptedNonce);
+  const valid = a.length === b.length && timingSafeEqual(a, b);
+  if (!valid) {
     res.status(401).json({ error: "invalid challenge response" });
     return;
   }
@@ -179,7 +160,10 @@ authRouter.get("/me", (req: Request, res: Response) => {
   }
 
   const user = getUserById(session.userId);
-  if (!user) return res.status(401).json({ error: "user not found" });
+  if (!user) {
+    res.status(401).json({ error: "user not found" });
+    return;
+  }
 
   res.status(200).json({ userId: session.userId, username: user.username, displayName: user.displayName });
 });

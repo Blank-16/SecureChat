@@ -4,11 +4,18 @@ export const COOKIE_NAME = "sc_session";
 const IS_PROD = process.env.NODE_ENV === "production";
 
 export function parseCookies(cookieHeader: string): Record<string, string> {
+  if (!cookieHeader) return {};
   return Object.fromEntries(
-    cookieHeader.split(";").map((pair) => {
+    cookieHeader.split(";").flatMap((pair) => {
       const [k, ...v] = pair.trim().split("=");
-      return [k.trim(), decodeURIComponent(v.join("="))];
-    }),
+      const key = k.trim();
+      if (!key) return [];
+      try {
+        return [[key, decodeURIComponent(v.join("="))]];
+      } catch {
+        return [[key, v.join("=")]];
+      }
+    })
   );
 }
 

@@ -3,14 +3,18 @@ import path from "path";
 import { DbUser, DbMessage, DbSession } from "./types/db";
 
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), "chat.db");
-const SESSION_TTL_DAYS = parseInt(process.env.SESSION_TTL_DAYS || "30", 10);
+const rawTtl = parseInt(process.env.SESSION_TTL_DAYS ?? "30", 10);
+const SESSION_TTL_DAYS = Number.isFinite(rawTtl) && rawTtl > 0 ? rawTtl : 30;
 
-const db = new Database(DB_PATH);
-
-// write ahead logging (to allow simultaneous read and write
-// foreign key constraints
-db.pragma("journal_mode = WAL");
-db.pragma("foreign_keys = ON");
+let db: Database.Database;
+try {
+  db = new Database(DB_PATH);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+} catch (err) {
+  console.error("Failed to open database:", err);
+  process.exit(1);
+}
 
 db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -67,11 +71,7 @@ db.exec(`
     );
 `);
 
-try {
-  db.exec("ALTER TABLE users ADD COLUMN displayName TEXT NOT NULL DEFAULT ''");
-} catch {
-  // Ignored, column probably exists
-}
+
 
 
 export type DbError = "ALREADY_EXISTS" | "DATABASE_ERROR" | "NOT_FOUND";
@@ -95,10 +95,11 @@ export function createUser(
 
     if (!user) return { success: false, error: "DATABASE_ERROR" };
     return { success: true, data: user };
-  } catch (err: any) {
-    if (err.code === "SQLITE_CONSTRAINT_UNIQUE") {
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as any).code === "SQLITE_CONSTRAINT_UNIQUE") {
       return { success: false, error: "ALREADY_EXISTS" };
     }
+    console.error("createUser error:", err);
     return { success: false, error: "DATABASE_ERROR" };
   }
 }
@@ -133,10 +134,11 @@ export function createSession(
 
     if (!session) return { success: false, error: "DATABASE_ERROR" };
     return { success: true, data: session };
-  } catch (err: any) {
-    if (err.code === "SQLITE_CONSTRAINT_UNIQUE") {
+  } catch (err: unknown) {
+    if (err instanceof Error && 'code' in err && (err as any).code === "SQLITE_CONSTRAINT_UNIQUE") {
       return { success: false, error: "ALREADY_EXISTS" };
     }
+    console.error("createSession error:", err);
     return { success: false, error: "DATABASE_ERROR" };
   }
 }
@@ -168,35 +170,21 @@ export function deleteSession(token: string): void {
 }
 
 export function hasActiveSession(userId: number): boolean {
-  // Purging expired sessions for given user first, then check
-  const sessions = db
-    .prepare<[number], DbSession>("SELECT * FROM sessions WHERE userId = ?")
-    .all(userId);
-  const now = Date.now();
-  const ttlMs = SESSION_TTL_DAYS * 86_400_000;
+  db.prepare(`
+    DELETE FROM sessions
+    WHERE userId = ? AND (strftime('%s', 'now') - strftime('%s', createdAt)) > ?
+  `).run(userId, SESSION_TTL_DAYS * 86_400);
 
-  const validSessions = sessions.filter((s) => {
-    const createdAt = new Date(s.createdAt + "Z").getTime();
-    const expired = now > createdAt + ttlMs;
-    if (expired) {
-      db.prepare("DELETE FROM sessions WHERE token = ?").run(s.token);
-    }
-    return !expired;
-  });
-
-  return validSessions.length > 0;
+  const row = db.prepare<[number], { count: number }>(
+    "SELECT COUNT(*) as count FROM sessions WHERE userId = ?"
+  ).get(userId);
+  return (row?.count ?? 0) > 0;
 }
 
 export function purgeExpiredSessions(): void {
-  const now = Date.now();
-  const ttlMs = SESSION_TTL_DAYS * 86_400_000;
-  // This is a more efficient bulk delete based on timestamp
-  // We use datetime('now', '-N days') to match the createdAt format if needed, 
-  // but since we store ISO-ish strings, simple comparison works.
-  db.prepare(`
-    DELETE FROM sessions 
-    WHERE (strftime('%s', 'now') - strftime('%s', createdAt)) > ?
-  `).run(SESSION_TTL_DAYS * 86_400);
+  db.prepare(
+    "DELETE FROM sessions WHERE (strftime('%s', 'now') - strftime('%s', createdAt)) > ?"
+  ).run(SESSION_TTL_DAYS * 86_400);
 }
 
 export function saveMessage(
@@ -285,19 +273,31 @@ export function removeContact(userId: number, contactId: number): void {
 }
 
 export function getContactsForUser(userId: number): DbUser[] {
-  return db.prepare<[number], DbUser>(`
-    SELECT u.* FROM users u
-    JOIN contacts c ON u.id = c.contactId
-    WHERE c.userId = ?
-  `).all(userId);
+  return db.prepare<[number, number, number, number, number, number], DbUser>(`
+    SELECT DISTINCT u.* FROM users u
+    LEFT JOIN contacts c ON u.id = c.contactId AND c.userId = ?
+    LEFT JOIN messages m ON (u.id = m.senderId AND m.receiverId = ?)
+                         OR (u.id = m.receiverId AND m.senderId = ?)
+    WHERE u.id != ?
+      AND (c.id IS NOT NULL OR m.id IS NOT NULL)
+      AND u.id NOT IN (SELECT blockedId FROM blocks WHERE blockerId = ?)
+      AND u.id NOT IN (SELECT blockerId FROM blocks WHERE blockedId = ?)
+    ORDER BY u.username
+  `).all(userId, userId, userId, userId, userId, userId);
 }
 
 export function getUsersWhoAdded(contactId: number): DbUser[] {
-  return db.prepare<[number], DbUser>(`
-    SELECT u.* FROM users u
-    JOIN contacts c ON u.id = c.userId
-    WHERE c.contactId = ?
-  `).all(contactId);
+  return db.prepare<[number, number, number, number, number, number], DbUser>(`
+    SELECT DISTINCT u.* FROM users u
+    LEFT JOIN contacts c ON u.id = c.userId AND c.contactId = ?
+    LEFT JOIN messages m ON (u.id = m.senderId AND m.receiverId = ?)
+                         OR (u.id = m.receiverId AND m.senderId = ?)
+    WHERE u.id != ?
+      AND (c.id IS NOT NULL OR m.id IS NOT NULL)
+      AND u.id NOT IN (SELECT blockedId FROM blocks WHERE blockerId = ?)
+      AND u.id NOT IN (SELECT blockerId FROM blocks WHERE blockedId = ?)
+    ORDER BY u.username
+  `).all(contactId, contactId, contactId, contactId, contactId, contactId);
 }
 
 export function blockUser(blockerId: number, blockedId: number): void {
@@ -332,6 +332,7 @@ export function deleteConversation(userAId: number, userBId: number): void {
   db.prepare(`
     DELETE FROM messages
     WHERE (senderId = ? AND receiverId = ?)
-       OR (senderId = ? AND receiverId = ?)
   `).run(userAId, userBId, userBId, userAId);
 }
+
+export { db };
