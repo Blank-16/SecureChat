@@ -1,41 +1,7 @@
 import { WebSocket } from "ws";
-import { RegisterPayload, RequestPublicKeyPayload } from "../../types/messages";
-import { getUserByUsername, createUser } from "../../db";
+import { RequestPublicKeyPayload } from "../../types/messages";
+import { getUserByUsername } from "../../db";
 import { connections, typingState, send, broadcastToSubscribers, findSocketByUserId } from "./utils";
-
-// Handles user registration and notifies others of online status.
-export function handleRegister(ws: WebSocket, payload: RegisterPayload): void {
-  let user = getUserByUsername(payload.username);
-  if (!user) {
-    const result = createUser(payload.username, payload.publicKey);
-    if (!result.success) {
-      send(ws, { type: "error", payload: { message: result.error } });
-      return;
-    }
-    user = result.data;
-  } else if (user.publicKey !== payload.publicKey) {
-    send(ws, {
-      type: "error",
-      payload: { message: "username taken or public key mismatch" },
-    });
-    return;
-  }
-
-  connections.set(ws, { userId: user.id, username: user.username });
-
-  send(ws, {
-    type: "registered",
-    payload: { userId: user.id, username: user.username },
-  });
-
-  broadcast(
-    {
-      type: "user_status",
-      payload: { userId: user.id, username: user.username, online: true },
-    },
-    ws,
-  );
-}
 
 // Retrieves the public key for a specific user.
 export function handleRequestPublicKey(

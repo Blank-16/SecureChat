@@ -16,7 +16,7 @@ export function handleSendMessage(
 
   const receiver = getUserByUsername(payload.to);
   if (!receiver) {
-    send(ws, { type: "error", payload: { message: "recipient not found " } });
+    send(ws, { type: "error", payload: { message: "recipient not found" } });
     return;
   }
 
@@ -39,11 +39,6 @@ export function handleSendMessage(
 
   const saved = result.data;
 
-  // Acknowledge receipt to sender
-  send(ws, {
-    type: "message_ack",
-    payload: { id: saved.id },
-  });
 
   send(ws, {
     type: "message",

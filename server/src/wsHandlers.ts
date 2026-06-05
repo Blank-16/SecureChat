@@ -1,7 +1,7 @@
 import { IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { getSessionTokenFromRequest } from "./cookies";
-import { send, connections, broadcast, broadcastToSubscribers } from "./ws/handlers/utils";
+import { send, connections, broadcastToSubscribers } from "./ws/handlers/utils";
 import { getSessionByToken, getUserById, purgeExpiredSessions } from "./db";
 import { checkRateLimit, clearRateBucket } from "./ws/rateLimit";
 import { ClientMessage } from "./types/messages";
@@ -18,8 +18,7 @@ import {
   handleBlockUser,
   handleUnblockUser
 } from "./ws/handlers/contacts";
-import { handleRequestPublicKey } from "./ws/handlers/auth";
-import { handleDisconnect } from "./ws/handlers";
+import { handleRequestPublicKey, handleDisconnect } from "./ws/handlers/auth";
 
 // Extension of WebSocket to track liveness
 interface ExtWebSocket extends WebSocket {
@@ -31,7 +30,7 @@ const SESSION_PURGE_INTERVAL = 3600000; // 1 hour
 
 export function setupWebSocketServer(wss: WebSocketServer): void {
   // Periodically purge expired sessions from DB
-  setInterval(() => {
+  const purgeInterval = setInterval(() => {
     purgeExpiredSessions();
   }, SESSION_PURGE_INTERVAL);
 
@@ -50,6 +49,7 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
 
   wss.on("close", () => {
     clearInterval(interval);
+    clearInterval(purgeInterval);
   });
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
@@ -91,12 +91,12 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
     }
 
     // Register connection
-    connections.set(ws, { userId: user.id, username: user.username });
+    connections.set(ws, { userId: user.id, username: user.username, displayName: user.displayName });
 
     // Notify user of successful registration
     send(ws, {
       type: "registered",
-      payload: { userId: user.id, username: user.username },
+      payload: { userId: user.id, username: user.username, displayName: user.displayName },
     });
 
     // Broadcast user status to mutuals
@@ -115,7 +115,13 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
           type: "error",
           payload: { message: "rate limit exceeded" },
         });
-        ws.close(1008, "rate limit exceeded");
+        ws.terminate();
+        return;
+      }
+
+      const MAX_WS_FRAME = 65_536;
+      if (data.toString().length > MAX_WS_FRAME) {
+        send(ws, { type: "error", payload: { message: "message too large" } });
         return;
       }
 
@@ -136,7 +142,7 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
 
       switch (parsed.type) {
         case "send_message":
-          if (parsed.payload?.to && parsed.payload?.ciphertext) {
+          if (parsed.payload?.to && parsed.payload?.ciphertext && parsed.payload?.senderCiphertext) {
             handleSendMessage(ws, parsed.payload);
           }
           break;
@@ -197,9 +203,7 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
     });
 
     ws.on("error", (err) => {
-      console.error("WebSocket error: ", err.message);
-      handleDisconnect(ws);
-      clearRateBucket(ws);
+      console.error("WebSocket error:", err.message);
     });
   });
 }
