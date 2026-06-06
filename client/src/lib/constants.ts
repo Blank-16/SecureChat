@@ -1,9 +1,6 @@
-export const API_URL =
-  (import.meta as { env?: { VITE_API_URL?: string } }).env?.VITE_API_URL ??
-  `http://${window.location.hostname}:4000`;
+export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
 
-const wsUrl = (import.meta as { env?: { VITE_WS_URL?: string } }).env
-  ?.VITE_WS_URL;
+const wsUrl = import.meta.env.VITE_WS_URL ?? API_URL;
 
 if (!wsUrl) {
   throw new Error("VITE_WS_URL is not set. Add it to your .env file.");

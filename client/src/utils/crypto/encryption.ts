@@ -4,7 +4,7 @@ import {
   AES_IV_LENGTH,
   RSA_ALGORITHM,
 } from "./constants";
-import { CryptoError, base64ToUint8, uint8ToBase64 } from "./helpers";
+import { CryptoError, base64ToUint8, uint8ToBase64, toBuffer } from "./helpers";
 
 /**
  * Encrypts a plaintext string using a hybrid encryption scheme:
@@ -148,7 +148,7 @@ export async function decryptRSA(
     const decryptedBuf = await crypto.subtle.decrypt(
       { name: RSA_ALGORITHM },
       privateKey,
-      ciphertextBuf
+      toBuffer(ciphertextBuf)
     );
     return new TextDecoder().decode(decryptedBuf);
   } catch (err) {

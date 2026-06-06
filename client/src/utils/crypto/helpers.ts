@@ -29,6 +29,6 @@ export function base64ToUint8(b64: string): Uint8Array {
   try {
     return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   } catch (err) {
-    throw new TypeError(`Invalid base64 string: ${(err as Error).message}`);
+    throw new TypeError(`Invalid base64 string: ${err instanceof Error ? err.message : String(err)}`);
   }
 }

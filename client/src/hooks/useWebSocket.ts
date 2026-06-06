@@ -11,11 +11,7 @@ export type PublicKeyHandler = (username: string, publicKey: string) => void;
 
 export interface UseWebSocketReturn {
   status: ConnectionStatus;
-  sendMessage: (
-    to: string,
-    ciphertext: string,
-    senderCiphertext: string,
-  ) => void;
+  sendMessage: (to: string, ciphertext: string, senderCiphertext: string) => void;
   requestHistory: (withUser: string) => void;
   requestPublicKey: (username: string) => void;
   sendTyping: (to: string, isTyping: boolean) => void;
@@ -27,10 +23,13 @@ export interface UseWebSocketReturn {
   deleteChat: (username: string) => void;
 }
 
+const MAX_RECONNECT_DELAY_MS = 30_000;
+
 export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelay = useRef(RECONNECT_DELAY_MS);
   const activeConversationRef = useRef<string | null>(null);
   const publicKeyHandlerRef = useRef<PublicKeyHandler | null>(null);
   const isMountedRef = useRef(true);
@@ -42,17 +41,25 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
   }, []);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!isMountedRef.current) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN ||
+        wsRef.current?.readyState === WebSocket.CONNECTING) return;
+
     setStatus("connecting");
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
-    ws.onopen = () => setStatus("connected");
+    ws.onopen = () => {
+      reconnectDelay.current = RECONNECT_DELAY_MS;
+      setStatus("connected");
+    };
 
     ws.onmessage = (event: MessageEvent<string>) => {
       let envelope: ServerEnvelope;
       try {
-        envelope = JSON.parse(event.data) as ServerEnvelope;
+        const parsed = JSON.parse(event.data);
+        if (!parsed || typeof parsed !== "object" || typeof parsed.type !== "string") return;
+        envelope = parsed as ServerEnvelope;
       } catch {
         return;
       }
@@ -60,16 +67,11 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
 
       switch (type) {
         case "registered": {
-          const p = payload as { userId: number; username: string };
-          useAuthStore.getState().setAuthenticated(p.username, (p as any).displayName || "");
+          const p = payload as { userId: number; username: string; displayName: string };
+          useAuthStore.getState().setAuthenticated(p.username, p.displayName ?? "");
           sendRaw({ type: "get_contacts" });
           if (activeConversationRef.current) {
-            ws.send(
-              JSON.stringify({
-                type: "get_history",
-                payload: { with: activeConversationRef.current },
-              }),
-            );
+            sendRaw({ type: "get_history", payload: { with: activeConversationRef.current } });
           }
           break;
         }
@@ -77,20 +79,23 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           const p = payload as unknown as Message;
           const self = useAuthStore.getState().username;
           const peer = p.from === self ? p.to : p.from;
-          
+
           if (p.from === self) {
-            // Echo from server: confirm the pending optimistic message
             const msgs = useChatStore.getState().getMessages(peer);
             const pendingMsg = msgs.find(m => m.id < 0 && m.sendStatus === "sending");
             if (pendingMsg) {
               p.plaintext = pendingMsg.plaintext;
-              p.sendStatus = "send" as const;
+              p.sendStatus = "send";
               useChatStore.getState().confirm(peer, pendingMsg.id, p);
             }
           } else {
             useChatStore.getState().append(peer, p);
             if (useUiStore.getState().selectedUser !== p.from) {
               useContactsStore.getState().incrementUnread(p.from);
+            }
+            const currentContacts = useContactsStore.getState().contacts;
+            if (!currentContacts.some(c => c.username === peer)) {
+              sendRaw({ type: "get_contacts" });
             }
           }
           break;
@@ -107,12 +112,7 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           break;
         }
         case "user_status": {
-          const p = payload as {
-            userId: number;
-            username: string;
-            displayName: string;
-            online: boolean;
-          };
+          const p = payload as { username: string; online: boolean };
           useContactsStore.getState().updateContactStatus(p.username, p.online);
           break;
         }
@@ -129,14 +129,12 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
         case "chat_deleted": {
           const p = payload as { with: string };
           useChatStore.getState().setHistory(p.with, []);
+          sendRaw({ type: "get_contacts" });
           break;
         }
         case "error": {
           const p = payload as { message: string };
-          if (
-            p.message === "authentication required" ||
-            p.message === "invalid session"
-          ) {
+          if (p.message === "authentication required" || p.message === "invalid session") {
             useAuthStore.getState().setUnauthenticated();
           }
           console.error("Server error:", p.message);
@@ -148,14 +146,17 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
     ws.onclose = (event) => {
       setStatus("disconnected");
       if (!isMountedRef.current || event.code === 1008) return;
-      reconnectTimer.current = setTimeout(connect, RECONNECT_DELAY_MS);
+      reconnectTimer.current = setTimeout(() => {
+        if (isMountedRef.current) connect();
+      }, reconnectDelay.current);
+      reconnectDelay.current = Math.min(reconnectDelay.current * 2, MAX_RECONNECT_DELAY_MS);
     };
 
     ws.onerror = () => {
       setStatus("error");
       ws.close();
     };
-  }, []);
+  }, [sendRaw]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -170,17 +171,15 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
   return useMemo(() => ({
     status,
     sendMessage: (to, ciphertext, senderCiphertext) =>
-      sendRaw({
-        type: "send_message",
-        payload: { to, ciphertext, senderCiphertext },
-      }),
+      sendRaw({ type: "send_message", payload: { to, ciphertext, senderCiphertext } }),
     requestHistory: (withUser) => {
       activeConversationRef.current = withUser;
       sendRaw({ type: "get_history", payload: { with: withUser } });
     },
     requestPublicKey: (username) =>
       sendRaw({ type: "request_public_key", payload: { username } }),
-    sendTyping: (to, isTyping) => sendRaw({ type: "typing", payload: { to, isTyping } }),
+    sendTyping: (to, isTyping) =>
+      sendRaw({ type: "typing", payload: { to, isTyping } }),
     setPublicKeyHandler: (handler: PublicKeyHandler) => {
       publicKeyHandlerRef.current = handler;
     },
