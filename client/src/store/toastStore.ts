@@ -19,7 +19,7 @@ export const useToastStore = create<ToastStore>()(
   immer((set) => ({
     toasts: [],
     addToast: (message, type = "info") => {
-      const id = Math.random().toString(36).substring(2, 9);
+      const id = crypto.randomUUID();
       set((s) => {
         s.toasts.push({ id, message, type });
       });

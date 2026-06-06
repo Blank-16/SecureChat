@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import { User } from "../types";
+import type { User } from "../types";
 
 interface ContactsStore {
   contacts: User[];
@@ -23,39 +23,30 @@ export const useContactsStore = create<ContactsStore>()(
     setContacts: (contacts) => {
       set((s) => {
         s.contacts = contacts;
-      });
-    },
-
-    setBlocked: (blocked) => {
-      set((s) => {
-        s.blocked = blocked;
-      });
-    },
-
-    updateContactStatus: (username, online) => {
-      set((s) => {
-        const contact = s.contacts.find((c) => c.username === username);
-        if (contact) {
-          contact.online = online;
+        const validUsernames = new Set(contacts.map(c => c.username));
+        for (const username of Object.keys(s.unreadCounts)) {
+          if (!validUsernames.has(username)) delete s.unreadCounts[username];
         }
       });
     },
 
-    isBlocked: (username) => {
-      return get().blocked.some((u) => u.username === username);
+    setBlocked: (blocked) => set((s) => { s.blocked = blocked; }),
+
+    updateContactStatus: (username, online) => {
+      set((s) => {
+        const contact = s.contacts.find(c => c.username === username);
+        if (contact) contact.online = online;
+      });
     },
 
+    isBlocked: (username) => get().blocked.some(u => u.username === username),
+
     incrementUnread: (username) => {
-      set((s) => {
-        const count = s.unreadCounts[username] || 0;
-        s.unreadCounts[username] = count + 1;
-      });
+      set((s) => { s.unreadCounts[username] = (s.unreadCounts[username] ?? 0) + 1; });
     },
 
     clearUnread: (username) => {
-      set((s) => {
-        delete s.unreadCounts[username];
-      });
+      set((s) => { delete s.unreadCounts[username]; });
     },
-  })),
+  }))
 );

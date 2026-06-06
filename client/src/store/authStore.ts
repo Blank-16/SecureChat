@@ -3,6 +3,12 @@ import { immer } from "zustand/middleware/immer";
 import type { AuthState } from "../types";
 import { API_URL } from "../lib/constants";
 
+interface AuthResponse {
+  userId: number;
+  username: string;
+  displayName: string;
+}
+
 interface AuthStore {
   authState: AuthState;
   username: string;
@@ -20,34 +26,23 @@ export const useAuthStore = create<AuthStore>()(
     username: "",
     displayName: "",
 
-    setChecking: () => {
-      set((s) => {
-        s.authState = "checking";
-      });
-    },
+    setChecking: () => set((s) => { s.authState = "checking"; }),
 
-    setAuthenticated: (username, displayName) => {
-      set((s) => {
-        s.authState = "authenticated";
-        s.username = username;
-        s.displayName = displayName;
-      });
-    },
+    setAuthenticated: (username, displayName) => set((s) => {
+      s.authState = "authenticated";
+      s.username = username;
+      s.displayName = displayName;
+    }),
 
-    setUnauthenticated: () => {
-      set((s) => {
-        s.authState = "unauthenticated";
-        s.username = "";
-        s.displayName = "";
-      });
-    },
+    setUnauthenticated: () => set((s) => {
+      s.authState = "unauthenticated";
+      s.username = "";
+      s.displayName = "";
+    }),
 
     logout: async () => {
       try {
-        await fetch(`${API_URL}/auth/logout`, {
-          method: "POST",
-          credentials: "include",
-        });
+        await fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" });
       } catch (err) {
         console.error("Logout request failed:", err);
       }
@@ -57,29 +52,24 @@ export const useAuthStore = create<AuthStore>()(
         s.displayName = "";
       });
     },
+
     checkSession: async () => {
       try {
-        const res = await fetch(`${API_URL}/auth/me`, {
-          credentials: "include",
-        });
+        const res = await fetch(`${API_URL}/auth/me`, { credentials: "include" });
         if (res.ok) {
-          const data = await res.json();
+          const data = await res.json() as AuthResponse;
           set((s) => {
             s.authState = "authenticated";
             s.username = data.username;
             s.displayName = data.displayName;
           });
         } else {
-          set((s) => {
-            s.authState = "unauthenticated";
-          });
+          set((s) => { s.authState = "unauthenticated"; });
         }
       } catch (err) {
         console.error("Session check failed:", err);
-        set((s) => {
-          s.authState = "unauthenticated";
-        });
+        set((s) => { s.authState = "unauthenticated"; });
       }
     },
-  })),
+  }))
 );

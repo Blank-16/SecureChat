@@ -7,7 +7,7 @@ interface TypingStore {
   isTyping: (username: string) => boolean;
 }
 
-const typingTimeouts: Record<string, any> = {};
+const typingTimeouts: Record<string, ReturnType<typeof setTimeout>> = {};
 const TYPING_AUTO_EXPIRE_MS = 2500;
 
 export const useTypingStore = create<TypingStore>()(
