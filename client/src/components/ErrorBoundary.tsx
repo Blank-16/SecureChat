@@ -14,6 +14,10 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
     console.error("Uncaught error:", error, errorInfo);
   }
 
+  resetError = () => {
+    this.setState({ hasError: false });
+  }
+
   render() {
     if (this.state.hasError) {
       return (
@@ -31,8 +35,14 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { hasError
               </p>
               <div className="mt-8 flex w-full flex-col gap-3">
                 <button
-                  onClick={() => window.location.reload()}
+                  onClick={this.resetError}
                   className="inline-flex w-full justify-center rounded-none border-2 border-white bg-white text-black px-4 py-2.5 text-sm font-bold shadow-[3px_3px_0px_0px_rgba(255,255,255,0.15)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[3px] active:translate-y-[3px] transition-all cursor-pointer"
+                >
+                  RESET STATE
+                </button>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="inline-flex w-full justify-center rounded-none border-2 border-surface-600 bg-transparent text-white px-4 py-2.5 text-sm font-bold shadow-[3px_3px_0px_0px_rgba(255,255,255,0.15)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[3px] active:translate-y-[3px] transition-all cursor-pointer"
                 >
                   REBOOT APPLICATION
                 </button>

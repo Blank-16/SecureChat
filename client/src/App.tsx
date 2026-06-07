@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "./store/authStore";
 import { useCryptoStore } from "./store/cryptoStore";
+import { useChatStore } from "./store/chatStore";
 import { useEncryption } from "./hooks/useEncryption";
 import { useToastStore } from "./store/toastStore";
 import { AuthLayout } from "./components/auth/AuthLayout";
@@ -27,6 +28,12 @@ export function App() {
     void checkSession();
   }, [checkSession]);
 
+  useEffect(() => {
+    if (authState === "unauthenticated") {
+      useChatStore.getState().clearAll();
+    }
+  }, [authState]);
+
   async function handleUnlock(e: React.FormEvent) {
     e.preventDefault();
     if (unlockPassphrase.length < 6) {
@@ -37,6 +44,7 @@ export function App() {
     try {
       addToast("Decrypting local keys...", "info");
       await initialize(unlockPassphrase);
+      setUnlockPassphrase("");
       addToast("Local E2E workspace unlocked", "success");
     } catch (err: unknown) {
       console.error(err);
@@ -105,15 +113,18 @@ export function App() {
 
             <form onSubmit={handleUnlock} className="space-y-6">
               <div>
-                <label className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
+                <label htmlFor="unlock-passphrase" className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
                   ENTER PASSPHRASE TO UNLOCK
                 </label>
                 <input
+                  id="unlock-passphrase"
                   type="password"
                   value={unlockPassphrase}
                   onChange={(e) => setUnlockPassphrase(e.target.value)}
                   disabled={unlocking}
                   placeholder="••••••••••••"
+                  autoComplete="current-password"
+                  autoFocus
                   className="w-full bg-surface-900 border-2 border-surface-600 px-4 py-3 text-sm font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
                 />
               </div>

@@ -4,7 +4,7 @@ export function Toaster() {
   const { toasts, removeToast } = useToastStore();
 
   return (
-    <div className="fixed top-6 right-6 z-50 flex flex-col gap-4 pointer-events-none w-full max-w-sm">
+    <div role="status" aria-live="polite" aria-atomic="false" className="fixed top-6 right-6 z-50 flex flex-col gap-4 pointer-events-none w-full max-w-sm">
       {toasts.map((toast) => (
         <div
           key={toast.id}
