@@ -26,7 +26,11 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
       return;
     }
     if (!/^[a-zA-Z0-9_-]{2,24}$/.test(cleanUsername)) {
-      addToast("Username must be 2-24 alphanumeric characters", "error");
+      addToast("Username: 2-24 alphanumeric characters, _ or - only", "error");
+      return;
+    }
+    if (cleanDisplayName.length > 64) {
+      addToast("Display name must be 64 characters or less", "error");
       return;
     }
     if (passphrase.length < 6) {
@@ -36,13 +40,11 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
 
     onLoading(true);
     try {
-      addToast("Generating new keypair...", "info");
+      addToast("Generating keypair...", "info");
       await initialize(passphrase);
 
       const pubKeyB64 = useCryptoStore.getState().publicKeyB64;
-      if (!pubKeyB64) {
-        throw new Error("Failed to export public key");
-      }
+      if (!pubKeyB64) throw new Error("Failed to export public key");
 
       addToast("Registering with server...", "info");
       const res = await fetch(`${API_URL}/auth/register`, {
@@ -53,13 +55,12 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
       });
 
       if (!res.ok) {
-        const errData = await res.json().catch(() => ({ error: "Network error" }));
-        throw new Error(errData.error || "Registration failed");
+        const errData = await res.json().catch(() => ({ error: "Network error" })) as { error?: string };
+        throw new Error(errData.error ?? "Registration failed");
       }
 
-      const userData = await res.json();
-      addToast(`Account created successfully as ${userData.username}`, "success");
-      
+      const userData = await res.json() as { username: string; displayName: string };
+      addToast(`Account created as ${userData.username}`, "success");
       useAuthStore.getState().setAuthenticated(userData.username, userData.displayName);
     } catch (err: unknown) {
       console.error(err);
@@ -67,6 +68,7 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
       const msg = err instanceof Error ? err.message : "Registration failed";
       addToast(msg, "error");
     } finally {
+      setPassphrase("");
       onLoading(false);
     }
   }
@@ -74,43 +76,49 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <div>
-        <label className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
+        <label htmlFor="reg-username" className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
           [01] CHOOSE USERNAME
         </label>
         <input
+          id="reg-username"
           type="text"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           disabled={loading}
           placeholder="e.g. alice_12"
+          autoComplete="username"
           className="w-full bg-surface-900 border-2 border-surface-600 px-4 py-3 text-sm font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
         />
       </div>
 
       <div>
-        <label className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
+        <label htmlFor="reg-displayname" className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
           [02] DISPLAY NAME
         </label>
         <input
+          id="reg-displayname"
           type="text"
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           disabled={loading}
           placeholder="e.g. Alice"
+          autoComplete="name"
           className="w-full bg-surface-900 border-2 border-surface-600 px-4 py-3 text-sm font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
         />
       </div>
 
       <div>
-        <label className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
+        <label htmlFor="reg-passphrase" className="block text-xs uppercase font-bold text-surface-400 mb-2 tracking-wider">
           [03] LOCAL_PASSPHRASE
         </label>
         <input
+          id="reg-passphrase"
           type="password"
           value={passphrase}
           onChange={(e) => setPassphrase(e.target.value)}
           disabled={loading}
           placeholder="••••••••••••"
+          autoComplete="new-password"
           className="w-full bg-surface-900 border-2 border-surface-600 px-4 py-3 text-sm font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
         />
       </div>
@@ -118,13 +126,11 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
       <button
         type="submit"
         disabled={loading}
-        className={`w-full py-3.5 border-2 font-bold uppercase text-sm tracking-widest cursor-pointer select-none rounded-none transition-all
-          ${
-            loading
-              ? "bg-surface-700 border-surface-600 text-surface-500 cursor-not-allowed"
-              : "bg-accent border-black text-black shadow-[4px_4px_0px_0px_rgba(124,106,245,0.2)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[4px] active:translate-y-[4px]"
-          }
-        `}
+        className={`w-full py-3.5 border-2 font-bold uppercase text-sm tracking-widest cursor-pointer select-none rounded-none transition-all ${
+          loading
+            ? "bg-surface-700 border-surface-600 text-surface-500 cursor-not-allowed"
+            : "bg-accent border-black text-black shadow-[4px_4px_0px_0px_rgba(124,106,245,0.2)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] active:translate-x-[4px] active:translate-y-[4px]"
+        }`}
       >
         {loading ? "GENERATING_KEYS..." : "CREATE_SECURE_ACCOUNT"}
       </button>
