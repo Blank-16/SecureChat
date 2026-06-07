@@ -77,7 +77,11 @@ echo "--------------------------------------------------"
 cleanup() {
   echo ""
   echo "🧹 Terminating client and server processes..."
-  kill $CLIENT_PID $SERVER_PID 2>/dev/null
+  kill $CLIENT_PID $SERVER_PID 2>/dev/null || true
+  pkill -P $CLIENT_PID 2>/dev/null || true
+  pkill -P $SERVER_PID 2>/dev/null || true
+  fuser -k 4000/tcp 2>/dev/null || true
+  fuser -k 5173/tcp 2>/dev/null || true
   echo "✅ Processes terminated cleanly. Goodbye!"
   exit 0
 }
