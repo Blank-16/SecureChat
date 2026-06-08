@@ -10,11 +10,13 @@ import { useToastStore } from "../store/toastStore";
 import { formatTime } from "../lib/formatTime";
 import { AddContactModal } from "./AddContactModal";
 import { ConfirmModal } from "./ConfirmModal";
+import { SafetyNumberModal } from "./SafetyNumberModal";
 
 type ActiveModal =
   | { kind: "addContact" }
   | { kind: "deleteChat"; peer: string }
   | { kind: "block"; peer: string }
+  | { kind: "safetyNumber"; peer: string; peerKey: string; ownKey: string }
   | null;
 
 export function ChatDashboard() {
@@ -34,6 +36,8 @@ export function ChatDashboard() {
 
   const {
     wsStatus,
+    publicKeyB64,
+    ensurePublicKey,
     sendMessage,
     selectUser,
     loadHistory,
@@ -139,6 +143,14 @@ export function ChatDashboard() {
             blockUser(activeModal.peer);
             setSelectedUser(null);
           }}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+      {activeModal?.kind === "safetyNumber" && (
+        <SafetyNumberModal
+          peer={activeModal.peer}
+          peerKey={activeModal.peerKey}
+          ownKey={activeModal.ownKey}
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -272,12 +284,27 @@ export function ChatDashboard() {
                     >
                       BLOCK
                     </button>
-                    <div className="bg-emerald-950 border border-emerald-500 text-emerald-500 text-[10px] font-bold px-2 py-0.5 rounded-none flex items-center gap-1 select-none">
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <button
+                      onClick={async () => {
+                        if (!publicKeyB64) return;
+                        const pk = await ensurePublicKey(selectedUser);
+                        if (pk) {
+                          setActiveModal({
+                            kind: "safetyNumber",
+                            peer: selectedUser,
+                            peerKey: pk,
+                            ownKey: publicKeyB64,
+                          });
+                        }
+                      }}
+                      className="bg-emerald-950 hover:bg-emerald-900 border border-emerald-500 text-emerald-400 hover:text-emerald-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded-none flex items-center gap-1 cursor-pointer transition-colors"
+                      title="Verify Safety Numbers"
+                    >
+                      <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                       </svg>
-                      E2E_ENCRYPTED
-                    </div>
+                      E2E_VERIFIED
+                    </button>
                   </div>
                 </div>
 

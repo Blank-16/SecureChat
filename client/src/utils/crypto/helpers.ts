@@ -32,3 +32,22 @@ export function base64ToUint8(b64: string): Uint8Array {
     throw new TypeError(`Invalid base64 string: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
+
+export async function getFingerprint(publicKeyB64: string): Promise<string> {
+  try {
+    const derBuffer = base64ToUint8(publicKeyB64);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", toBuffer(derBuffer));
+    const hashArray = new Uint8Array(hashBuffer);
+    const blocks: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const byte1 = hashArray[i * 2];
+      const byte2 = hashArray[i * 2 + 1];
+      const val = (byte1 * 256 + byte2) % 100000;
+      blocks.push(String(val).padStart(5, "0"));
+    }
+    return blocks.join(" ");
+  } catch {
+    return "00000 00000 00000 00000 00000";
+  }
+}
+

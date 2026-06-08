@@ -4,6 +4,7 @@ import { useWebSocket } from "./useWebSocket";
 import { useAuthStore } from "../store/authStore";
 import { useChatStore, nextOptimisticId } from "../store/chatStore";
 import type { Message } from "../types";
+import { cacheMessage, getCachedMessages, clearCache } from "../utils/messageCache";
 
 export function useChat(authenticated: boolean) {
   const { publicKeyB64, encryptFor, decryptOwn, ready } = useEncryption();
@@ -11,6 +12,13 @@ export function useChat(authenticated: boolean) {
 
   const keyCache = useRef<Map<string, string>>(new Map());
   const keyRequests = useRef<Map<string, Array<(key: string | null) => void>>>(new Map());
+
+  const authState = useAuthStore((s) => s.authState);
+  useEffect(() => {
+    if (authState === "unauthenticated") {
+      void clearCache();
+    }
+  }, [authState]);
 
   useEffect(() => {
     ws.setPublicKeyHandler((username, key) => {
@@ -62,9 +70,14 @@ export function useChat(authenticated: boolean) {
       decryptError = true;
     }
     useChatStore.getState().setDecrypted(peer, msg.id, plaintext, decryptError);
+    void cacheMessage(peer, { ...msg, plaintext, decryptError });
   }, [decryptOwn]);
 
-  const selectUser = useCallback((peer: string) => {
+  const selectUser = useCallback(async (peer: string) => {
+    const cached = await getCachedMessages(peer);
+    if (cached.length > 0) {
+      useChatStore.getState().setHistory(peer, cached);
+    }
     if (!keyCache.current.has(peer) && !keyRequests.current.has(peer)) {
       keyRequests.current.set(peer, []);
       ws.requestPublicKey(peer);
@@ -118,6 +131,8 @@ export function useChat(authenticated: boolean) {
 
   return useMemo(() => ({
     ready,
+    publicKeyB64,
+    ensurePublicKey,
     wsStatus: ws.status,
     sendMessage,
     selectUser,
@@ -129,6 +144,6 @@ export function useChat(authenticated: boolean) {
     blockUser: ws.blockUser,
     unblockUser: ws.unblockUser,
     deleteChat: ws.deleteChat,
-  }), [ready, ws.status, sendMessage, selectUser, loadHistory, decryptAndStore,
+  }), [ready, publicKeyB64, ensurePublicKey, ws.status, sendMessage, selectUser, loadHistory, decryptAndStore,
     ws.sendTyping, ws.addContact, ws.removeContact, ws.blockUser, ws.unblockUser, ws.deleteChat]);
 }
