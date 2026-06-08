@@ -99,6 +99,14 @@ export function ChatDashboard() {
   }, [selectedUser, loadHistory, clearUnread]);
 
   useEffect(() => {
+    if (selectedGroup) {
+      const groupKey = "group:" + selectedGroup;
+      loadHistory(groupKey);
+      clearUnread(groupKey);
+    }
+  }, [selectedGroup, loadHistory, clearUnread]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeMessages?.length, isPeerTyping]);
 
@@ -456,6 +464,11 @@ export function ChatDashboard() {
                                 : "bg-surface-800 border-surface-600 text-peer-text"
                             }`}
                           >
+                            {!isSelf && selectedGroup && (
+                              <div className="text-[9px] uppercase font-bold text-surface-500 mb-1 tracking-widest border-b border-surface-600/50 pb-0.5 inline-block">
+                                {msg.from}
+                              </div>
+                            )}
                             {msg.decryptError ? (
                               <div className="bg-red-950/70 border border-red-500 text-red-400 p-2 text-[10px] uppercase font-bold flex items-center gap-1.5">
                                 <svg className="w-4 h-4 text-red-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">

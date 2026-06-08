@@ -362,6 +362,7 @@ export function deleteConversation(userAId: number, userBId: number): void {
   db.prepare(`
     DELETE FROM messages
     WHERE (senderId = ? AND receiverId = ?)
+       OR (senderId = ? AND receiverId = ?)
   `).run(userAId, userBId, userBId, userAId);
 }
 
