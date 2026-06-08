@@ -1,13 +1,29 @@
-export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:4000";
+const isDev = import.meta.env.DEV;
 
-const wsUrl = import.meta.env.VITE_WS_URL ?? API_URL;
+export const API_URL = import.meta.env.VITE_API_URL
+  ? (import.meta.env.VITE_API_URL.startsWith("http") ? import.meta.env.VITE_API_URL : window.location.origin)
+  : (isDev ? "http://localhost:4000" : window.location.origin);
 
-if (!wsUrl) {
-  throw new Error("VITE_WS_URL is not set. Add it to your .env file.");
-}
+const rawWsUrl = import.meta.env.VITE_WS_URL;
 
-export const WS_URL = wsUrl.replace(/^http/, "ws");
+export const WS_URL = (() => {
+  if (rawWsUrl) {
+    if (rawWsUrl.startsWith("ws")) return rawWsUrl;
+    if (rawWsUrl.startsWith("http")) return rawWsUrl.replace(/^http/, "ws");
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}${rawWsUrl.startsWith("/") ? "" : "/"}${rawWsUrl}`;
+  }
+  
+  if (isDev) {
+    return "ws://localhost:4000/ws";
+  } else {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}/ws`;
+  }
+})();
+
 export const RECONNECT_DELAY_MS = 3000;
 export const TYPING_DEBOUNCE_MS = 1500;
 export const KEY_FETCH_RETRIES = 8;
 export const KEY_FETCH_INTERVAL_MS = 250;
+
