@@ -2,7 +2,9 @@ export interface DbUser {
   id: number;
   username: string;
   displayName: string;
-  publicKey: string;
+  identityKey: string;
+  preKey: string;
+  preKeySignature: string;
   createdAt: string;
 }
 

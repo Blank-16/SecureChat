@@ -21,7 +21,9 @@ db.exec(`
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         displayName TEXT NOT NULL DEFAULT '',
-        publicKey TEXT NOT NULL,
+        identityKey TEXT NOT NULL,
+        preKey TEXT NOT NULL,
+        preKeySignature TEXT NOT NULL,
         createdAt TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -89,19 +91,27 @@ db.exec(`
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         groupId INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
         senderId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ciphertext TEXT NOT NULL,
+        keyId INTEGER NOT NULL,
         timestamp TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
-    CREATE TABLE IF NOT EXISTS group_envelopes (
+    CREATE TABLE IF NOT EXISTS group_keys (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        groupMessageId INTEGER NOT NULL REFERENCES group_messages(id) ON DELETE CASCADE,
-        recipientId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        ciphertext TEXT NOT NULL,
-        UNIQUE(groupMessageId, recipientId)
+        groupId INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        userId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        keyId INTEGER NOT NULL,
+        encryptedKey TEXT NOT NULL,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(groupId, userId, keyId)
     );
+    CREATE INDEX IF NOT EXISTS idx_group_members_userId ON group_members(userId);
+    CREATE INDEX IF NOT EXISTS idx_group_members_groupId ON group_members(groupId);
+    CREATE INDEX IF NOT EXISTS idx_group_messages_groupId ON group_messages(groupId);
+    CREATE INDEX IF NOT EXISTS idx_group_keys_groupId_userId ON group_keys(groupId, userId);
+    CREATE INDEX IF NOT EXISTS idx_contacts_userId ON contacts(userId);
+    CREATE INDEX IF NOT EXISTS idx_blocks_blockerId_blockedId ON blocks(blockerId, blockedId);
 `);
-
-
 
 
 export type DbError = "ALREADY_EXISTS" | "DATABASE_ERROR" | "NOT_FOUND";
@@ -113,15 +123,17 @@ export type DbResult<T> =
 export function createUser(
   username: string,
   displayName: string,
-  publicKey: string,
+  identityKey: string,
+  preKey: string,
+  preKeySignature: string
 ): DbResult<DbUser> {
   try {
     const user = db
       .prepare<
-        [string, string, string],
+        [string, string, string, string, string],
         DbUser
-      >("INSERT INTO users (username, displayName, publicKey) VALUES (?, ?, ?) RETURNING *")
-      .get(username, displayName, publicKey);
+      >("INSERT INTO users (username, displayName, identityKey, preKey, preKeySignature) VALUES (?, ?, ?, ?, ?) RETURNING *")
+      .get(username, displayName, identityKey, preKey, preKeySignature);
 
     if (!user) return { success: false, error: "DATABASE_ERROR" };
     return { success: true, data: user };
@@ -372,21 +384,43 @@ export interface DbGroup {
   members: string[];
 }
 
-export function createGroup(name: string, creatorId: number, memberUsernames: string[]): DbGroup | null {
+export function createGroup(name: string, creatorId: number, keys: Record<string, string>): DbGroup | null {
+  if (Object.keys(keys).length < 2) return null;
+  
+  const creator = db.prepare("SELECT username FROM users WHERE id = ?").get(creatorId) as { username: string } | undefined;
+  if (!creator || !keys[creator.username]) return null;
+  
+  for (const [username, encryptedKey] of Object.entries(keys)) {
+    if (typeof encryptedKey !== 'string' || encryptedKey.length < 10) return null;
+  }
+
   const transaction = db.transaction(() => {
+    // Validate all usernames exist
+    const usernames = Object.keys(keys);
+    const placeholders = usernames.map(() => '?').join(',');
+    const foundUsers = db.prepare(`SELECT username FROM users WHERE username IN (${placeholders})`).all(...usernames) as { username: string }[];
+    if (foundUsers.length !== usernames.length) {
+      return null;
+    }
+
     const grp = db.prepare("INSERT INTO groups (name, creatorId) VALUES (?, ?) RETURNING *")
       .get(name, creatorId) as { id: number, name: string } | undefined;
     if (!grp) return null;
-
-    db.prepare("INSERT INTO group_members (groupId, userId) VALUES (?, ?)").run(grp.id, creatorId);
 
     const addMember = db.prepare(`
       INSERT INTO group_members (groupId, userId)
       SELECT ?, id FROM users WHERE username = ?
       ON CONFLICT DO NOTHING
     `);
-    for (const username of memberUsernames) {
+    
+    const addKey = db.prepare(`
+      INSERT INTO group_keys (groupId, userId, keyId, encryptedKey)
+      SELECT ?, id, 1, ? FROM users WHERE username = ?
+    `);
+
+    for (const [username, encryptedKey] of Object.entries(keys)) {
       addMember.run(grp.id, username);
+      addKey.run(grp.id, encryptedKey, username);
     }
     return grp;
   });
@@ -414,47 +448,130 @@ export function getGroupsForUser(userId: number): DbGroup[] {
     WHERE gm.userId = ?
   `).all(userId) as { id: number, name: string }[];
 
-  return grps.map(g => {
-    const members = db.prepare(`
-      SELECT username FROM users u
-      JOIN group_members gm ON u.id = gm.userId
-      WHERE gm.groupId = ?
-    `).all(g.id) as { username: string }[];
+  if (grps.length === 0) return [];
 
-    return {
-      id: g.id,
-      name: g.name,
-      members: members.map(m => m.username),
-    };
-  });
+  const groupIds = grps.map(g => g.id);
+  const placeholders = groupIds.map(() => '?').join(',');
+  const members = db.prepare(`
+    SELECT gm.groupId, u.username
+    FROM users u
+    JOIN group_members gm ON u.id = gm.userId
+    WHERE gm.groupId IN (${placeholders})
+  `).all(...groupIds) as { groupId: number, username: string }[];
+
+  const membersByGroup = members.reduce((acc, curr) => {
+    if (!acc[curr.groupId]) acc[curr.groupId] = [];
+    acc[curr.groupId].push(curr.username);
+    return acc;
+  }, {} as Record<number, string[]>);
+
+  return grps.map(g => ({
+    id: g.id,
+    name: g.name,
+    members: membersByGroup[g.id] || [],
+  }));
 }
 
-export function saveGroupMessage(groupId: number, senderId: number, envelopes: Record<string, string>): void {
-  const transaction = db.transaction(() => {
-    const msg = db.prepare("INSERT INTO group_messages (groupId, senderId) VALUES (?, ?) RETURNING id")
-      .get(groupId, senderId) as { id: number } | undefined;
-    if (!msg) return;
-
-    const saveEnvelope = db.prepare(`
-      INSERT INTO group_envelopes (groupMessageId, recipientId, ciphertext)
-      SELECT ?, id, ? FROM users WHERE username = ?
-    `);
-    for (const [username, ciphertext] of Object.entries(envelopes)) {
-      saveEnvelope.run(msg.id, ciphertext, username);
-    }
-  });
-  transaction();
+export function isGroupMember(groupId: number, userId: number): boolean {
+  const row = db.prepare<[number, number], { count: number }>(`
+    SELECT COUNT(*) as count FROM group_members WHERE groupId = ? AND userId = ?
+  `).get(groupId, userId);
+  return (row?.count ?? 0) > 0;
 }
 
-export function getGroupHistory(groupId: number, userId: number) {
+export function saveGroupMessage(groupId: number, senderId: number, ciphertext: string, keyId: number): number | undefined {
+  if (!isGroupMember(groupId, senderId)) return undefined;
+  
+  try {
+    const msg = db.prepare("INSERT INTO group_messages (groupId, senderId, ciphertext, keyId) VALUES (?, ?, ?, ?) RETURNING id")
+      .get(groupId, senderId, ciphertext, keyId) as { id: number } | undefined;
+    return msg?.id;
+  } catch (err) {
+    console.error("Failed to save group message:", err);
+    return undefined;
+  }
+}
+
+export function getGroupHistory(groupId: number, limit: number = 200) {
   return db.prepare(`
-    SELECT gm.id, u.username as [from], ge.ciphertext, gm.timestamp
+    SELECT gm.id, u.username as [from], gm.ciphertext, gm.keyId, gm.timestamp
     FROM group_messages gm
     JOIN users u ON gm.senderId = u.id
-    JOIN group_envelopes ge ON gm.id = ge.groupMessageId
-    WHERE gm.groupId = ? AND ge.recipientId = ?
-    ORDER BY gm.id ASC
-  `).all(groupId, userId) as { id: number, from: string, ciphertext: string, timestamp: string }[];
+    WHERE gm.groupId = ?
+    ORDER BY gm.id DESC
+    LIMIT ?
+  `).all(groupId, limit).reverse() as { id: number, from: string, ciphertext: string, keyId: number, timestamp: string }[];
+}
+
+export function getGroupKeysForUser(groupId: number, userId: number) {
+  if (!isGroupMember(groupId, userId)) return [];
+  
+  return db.prepare(`
+    SELECT keyId, encryptedKey
+    FROM group_keys
+    WHERE groupId = ? AND userId = ?
+  `).all(groupId, userId) as { keyId: number, encryptedKey: string }[];
+}
+
+export function addGroupMember(groupId: number, username: string, encryptedKey: string, keyId: number): boolean {
+  try {
+    let added = false;
+    const transaction = db.transaction(() => {
+      const res = db.prepare(`
+        INSERT INTO group_members (groupId, userId)
+        SELECT ?, id FROM users WHERE username = ?
+        ON CONFLICT DO NOTHING
+      `).run(groupId, username);
+      
+      if (res.changes === 0) return;
+      added = true;
+
+      db.prepare(`
+        INSERT INTO group_keys (groupId, userId, keyId, encryptedKey)
+        SELECT ?, id, ?, ? FROM users WHERE username = ?
+        ON CONFLICT DO NOTHING
+      `).run(groupId, keyId, encryptedKey, username);
+    });
+    transaction();
+    return added;
+  } catch {
+    return false;
+  }
+}
+
+export function removeGroupMember(groupId: number, username: string): boolean {
+  try {
+    const res = db.prepare(`
+      DELETE FROM group_members
+      WHERE groupId = ? AND userId = (SELECT id FROM users WHERE username = ?)
+    `).run(groupId, username);
+    return res.changes > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function rotateGroupKey(groupId: number, keyId: number, keys: Record<string, string>): boolean {
+  try {
+    let anyRotated = false;
+    const addKey = db.prepare(`
+      INSERT INTO group_keys (groupId, userId, keyId, encryptedKey)
+      SELECT ?, u.id, ?, ? FROM users u
+      JOIN group_members gm ON u.id = gm.userId
+      WHERE u.username = ? AND gm.groupId = ?
+      ON CONFLICT DO NOTHING
+    `);
+    const transaction = db.transaction(() => {
+      for (const [username, encryptedKey] of Object.entries(keys)) {
+        const res = addKey.run(groupId, keyId, encryptedKey, username, groupId);
+        if (res.changes > 0) anyRotated = true;
+      }
+    });
+    transaction();
+    return anyRotated;
+  } catch {
+    return false;
+  }
 }
 
 export { db };
