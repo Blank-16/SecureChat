@@ -1,129 +1,48 @@
-import {
-  AES_ALGORITHM,
-  AES_KEY_LENGTH,
-  AES_IV_LENGTH,
-  RSA_ALGORITHM,
-} from "./constants";
-import { CryptoError, base64ToUint8, uint8ToBase64, toBuffer } from "./helpers";
+import { AES_ALGORITHM, AES_IV_LENGTH } from "./constants";
+import { CryptoError, base64ToUint8, uint8ToBase64 } from "./helpers";
+import { hasSession, initializeSession, ratchetSendKey, ratchetReceiveKey } from "./ratchet";
+import { generatePreKeyPair, exportPublicKey, importPrePublicKey, importIdentityPublicKey, verifySignature } from "./keys";
+import { useCryptoStore } from "../../store/cryptoStore";
 
-/**
- * Encrypts a plaintext string using a hybrid encryption scheme:
- * 1. Generates a fresh, ephemeral symmetric AES-GCM-256 key.
- * 2. Encrypts the plaintext with this AES key.
- * 3. Encrypts the ephemeral AES key using the recipient's public RSA-OAEP key (key wrapping).
- *
- * This hybrid approach completely circumvents the strict plaintext size limit of RSA-OAEP
- * (which is ~190 bytes for RSA-2048 with SHA-256) while retaining asymmetric public key delivery.
- */
-export async function encrypt(
+export async function encryptMessage(
   plaintext: string,
-  publicKey: CryptoKey,
+  messageKey: CryptoKey,
 ): Promise<string> {
-  const aesKey = await crypto.subtle.generateKey(
-    { name: AES_ALGORITHM, length: AES_KEY_LENGTH },
-    true,
-    ["encrypt", "decrypt"],
-  );
-
   const iv = crypto.getRandomValues(new Uint8Array(AES_IV_LENGTH));
   const encoded = new TextEncoder().encode(plaintext);
 
   const encryptedData = new Uint8Array(
     (await crypto.subtle.encrypt(
       { name: AES_ALGORITHM, iv },
-      aesKey,
+      messageKey,
       encoded,
     )) as ArrayBuffer,
   );
 
-  const rawAesKey = new Uint8Array(
-    (await crypto.subtle.exportKey("raw", aesKey)) as ArrayBuffer,
-  );
-  const encryptedAesKey = new Uint8Array(
-    (await crypto.subtle.encrypt(
-      { name: RSA_ALGORITHM },
-      publicKey,
-      rawAesKey,
-    )) as ArrayBuffer,
-  );
-
-  const lenBuf = new Uint8Array(4);
-  new DataView(lenBuf.buffer).setUint32(0, encryptedAesKey.length, false);
-
-  const combined = new Uint8Array(
-    4 + encryptedAesKey.length + AES_IV_LENGTH + encryptedData.length,
-  );
-  let offset = 0;
-  combined.set(lenBuf, offset);
-  offset += 4;
-  combined.set(encryptedAesKey, offset);
-  offset += encryptedAesKey.length;
-  combined.set(iv, offset);
-  offset += AES_IV_LENGTH;
-  combined.set(encryptedData, offset);
+  const combined = new Uint8Array(AES_IV_LENGTH + encryptedData.length);
+  combined.set(iv, 0);
+  combined.set(encryptedData, AES_IV_LENGTH);
 
   return uint8ToBase64(combined);
 }
 
-/**
- * Decrypts a hybrid-encrypted ciphertext:
- * 1. Parses the packed structure (extracts RSA-wrapped AES key, AES IV, and ciphertext).
- * 2. Unwraps the ephemeral AES key using the recipient's private RSA-OAEP key.
- * 3. Decrypts the payload with the unwrapped AES-GCM key.
- */
-export async function decrypt(
+export async function decryptMessage(
   ciphertext: string,
-  privateKey: CryptoKey,
+  messageKey: CryptoKey,
 ): Promise<string> {
   const combined = base64ToUint8(ciphertext);
 
-  if (combined.length < 4) {
+  if (combined.length < AES_IV_LENGTH) {
     throw new CryptoError("Malformed ciphertext: too short");
   }
 
-  const encKeyLen = new DataView(
-    combined.buffer,
-    combined.byteOffset,
-    4,
-  ).getUint32(0, false);
-
-  if (combined.length < 4 + encKeyLen + AES_IV_LENGTH) {
-    throw new CryptoError("Malformed ciphertext: truncated payload");
-  }
-
-  let offset = 4;
-  const encryptedAesKey = combined.slice(offset, offset + encKeyLen);
-  offset += encKeyLen;
-  const iv = combined.slice(offset, offset + AES_IV_LENGTH);
-  offset += AES_IV_LENGTH;
-  const encryptedData = combined.slice(offset);
-
-  let rawAesKey: ArrayBuffer;
-  try {
-    rawAesKey = (await crypto.subtle.decrypt(
-      { name: RSA_ALGORITHM },
-      privateKey,
-      encryptedAesKey,
-    )) as ArrayBuffer;
-  } catch (err) {
-    throw new CryptoError(
-      "Failed to unwrap session key — wrong private key or tampered data",
-      { cause: err },
-    );
-  }
-
-  const aesKey = await crypto.subtle.importKey(
-    "raw",
-    rawAesKey,
-    { name: AES_ALGORITHM },
-    false,
-    ["decrypt"],
-  );
+  const iv = combined.slice(0, AES_IV_LENGTH);
+  const encryptedData = combined.slice(AES_IV_LENGTH);
 
   try {
     const decoded = (await crypto.subtle.decrypt(
       { name: AES_ALGORITHM, iv },
-      aesKey,
+      messageKey,
       encryptedData,
     )) as ArrayBuffer;
     return new TextDecoder().decode(decoded);
@@ -135,23 +54,212 @@ export async function decrypt(
   }
 }
 
-/**
- * Decrypts a simple RSA-OAEP ciphertext.
- * Used for decrypting challenge nonces during authentication.
- */
-export async function decryptRSA(
-  ciphertextB64: string,
-  privateKey: CryptoKey,
-): Promise<string> {
-  try {
-    const ciphertextBuf = base64ToUint8(ciphertextB64);
-    const decryptedBuf = await crypto.subtle.decrypt(
-      { name: RSA_ALGORITHM },
-      privateKey,
-      toBuffer(ciphertextBuf)
-    );
-    return new TextDecoder().decode(decryptedBuf);
-  } catch (err) {
-    throw new CryptoError("RSA Decryption failed", { cause: err });
+export async function encryptRatchet(peerUsername: string, text: string, peerIdentityB64: string, peerPreKeyB64: string, peerPreKeySig: string): Promise<string> {
+  let ephemeralPubStr = "";
+  if (!(await hasSession(peerUsername))) {
+    // 1. Verify peer's prekey signature
+    const peerIdentityKey = await importIdentityPublicKey(peerIdentityB64);
+    const valid = await verifySignature(peerIdentityKey, peerPreKeySig, new TextEncoder().encode(peerPreKeyB64));
+    if (!valid) throw new CryptoError("Invalid peer PreKey signature");
+
+    // 2. Generate Ephemeral Key
+    const ephemeralPair = await generatePreKeyPair();
+    ephemeralPubStr = await exportPublicKey(ephemeralPair.publicKey);
+
+    // 3. Initialize Session
+    const peerPreKey = await importPrePublicKey(peerPreKeyB64);
+    await initializeSession(peerUsername, ephemeralPair.privateKey, peerPreKey, true);
   }
+
+  const msgKey = await ratchetSendKey(peerUsername);
+  const rawCiphertext = await encryptMessage(text, msgKey);
+
+  // We serialize as JSON to include the ephemeral key if we just generated one.
+  return JSON.stringify({
+    ek: ephemeralPubStr || undefined,
+    ct: rawCiphertext,
+  });
+}
+
+export async function decryptRatchet(peerUsername: string, payloadStr: string): Promise<string> {
+  let payload: { ek?: string, ct: string };
+  try {
+    payload = JSON.parse(payloadStr);
+  } catch {
+    throw new CryptoError("Invalid payload format");
+  }
+
+  if (!(await hasSession(peerUsername))) {
+    if (!payload.ek) throw new CryptoError("Session uninitialized and no ephemeral key provided");
+
+    const myPreKeyPriv = useCryptoStore.getState().preKeyPrivateKey;
+    if (!myPreKeyPriv) throw new CryptoError("Local PreKey not ready");
+
+    const peerEphemeralPub = await importPrePublicKey(payload.ek);
+    await initializeSession(peerUsername, myPreKeyPriv, peerEphemeralPub, false);
+  }
+
+  const msgKey = await ratchetReceiveKey(peerUsername);
+  return await decryptMessage(payload.ct, msgKey);
+}
+
+export async function encryptECIES(text: string, peerPreKeyB64: string): Promise<string> {
+  const ephemeralPair = await generatePreKeyPair();
+  const ephemeralPubStr = await exportPublicKey(ephemeralPair.publicKey);
+  const peerPreKey = await importPrePublicKey(peerPreKeyB64);
+
+  const sharedSecretBits = await crypto.subtle.deriveBits(
+    { name: "ECDH", public: peerPreKey },
+    ephemeralPair.privateKey,
+    256
+  );
+  
+  const sharedSecret = await crypto.subtle.importKey(
+    "raw",
+    sharedSecretBits,
+    { name: "HKDF" },
+    false,
+    ["deriveKey"]
+  );
+
+  const saltBuf = new TextEncoder().encode("SecureChatSelfSalt");
+  const infoBuf = new TextEncoder().encode("SelfMessageKey");
+  
+  const msgKey = await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: saltBuf,
+      info: infoBuf,
+    },
+    sharedSecret,
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+
+  const ct = await encryptMessage(text, msgKey);
+  return JSON.stringify({ ek: ephemeralPubStr, ct });
+}
+
+export async function encryptSelf(text: string): Promise<string> {
+  const myPreKeyPubB64 = useCryptoStore.getState().preKeyPublicB64;
+  if (!myPreKeyPubB64) throw new CryptoError("PreKey not ready");
+  return encryptECIES(text, myPreKeyPubB64);
+}
+
+export async function decryptSelf(payloadStr: string): Promise<string> {
+  let payload: { ek?: string, ct: string };
+  try {
+    payload = JSON.parse(payloadStr);
+  } catch {
+    throw new CryptoError("Invalid payload format");
+  }
+  if (!payload.ek) throw new CryptoError("No ephemeral key in self ciphertext");
+
+  const myPreKeyPriv = useCryptoStore.getState().preKeyPrivateKey;
+  if (!myPreKeyPriv) throw new CryptoError("PreKey private not ready");
+
+  const ephemeralPub = await importPrePublicKey(payload.ek);
+  const sharedSecretBits = await crypto.subtle.deriveBits(
+    { name: "ECDH", public: ephemeralPub },
+    myPreKeyPriv,
+    256
+  );
+  
+  const sharedSecret = await crypto.subtle.importKey(
+    "raw",
+    sharedSecretBits,
+    { name: "HKDF" },
+    false,
+    ["deriveKey"]
+  );
+
+  const saltBuf = new TextEncoder().encode("SecureChatSelfSalt");
+  const infoBuf = new TextEncoder().encode("SelfMessageKey");
+  
+  const msgKey = await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: saltBuf,
+      info: infoBuf,
+    },
+    sharedSecret,
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+
+  return await decryptMessage(payload.ct, msgKey);
+}
+
+
+export const decryptECIES = decryptSelf;
+
+export async function generateGroupMasterKey(): Promise<string> {
+  const rawKey = crypto.getRandomValues(new Uint8Array(32));
+  return uint8ToBase64(rawKey);
+}
+
+export async function encryptGroupMessage(text: string, gmkB64: string, myIdentityPrivateKey: CryptoKey): Promise<string> {
+  const gmkRaw = new Uint8Array(base64ToUint8(gmkB64));
+  const gmk = await crypto.subtle.importKey(
+    "raw",
+    gmkRaw,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"]
+  );
+
+  const textBytes = new TextEncoder().encode(text);
+  
+  // Sign the plaintext
+  const signatureBytes = await crypto.subtle.sign(
+    { name: "ECDSA", hash: { name: "SHA-256" } },
+    myIdentityPrivateKey,
+    textBytes
+  );
+  
+  const payloadStr = JSON.stringify({
+    text,
+    sig: uint8ToBase64(new Uint8Array(signatureBytes))
+  });
+
+  return await encryptMessage(payloadStr, gmk);
+}
+
+export async function decryptGroupMessage(ciphertext: string, gmkB64: string, senderIdentityPublicB64: string): Promise<string> {
+  const gmkRaw = new Uint8Array(base64ToUint8(gmkB64));
+  const gmk = await crypto.subtle.importKey(
+    "raw",
+    gmkRaw,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt", "decrypt"]
+  );
+
+  const decryptedStr = await decryptMessage(ciphertext, gmk);
+  
+  let payload: { text: string, sig: string };
+  try {
+    payload = JSON.parse(decryptedStr);
+  } catch {
+    throw new CryptoError("Invalid group message payload");
+  }
+
+  const senderIdentityKey = await importIdentityPublicKey(senderIdentityPublicB64);
+  const sigBytes = new Uint8Array(base64ToUint8(payload.sig));
+  const textBytes = new TextEncoder().encode(payload.text);
+
+  const valid = await crypto.subtle.verify(
+    { name: "ECDSA", hash: { name: "SHA-256" } },
+    senderIdentityKey,
+    sigBytes,
+    textBytes
+  );
+
+  if (!valid) throw new CryptoError("Invalid group message signature");
+
+  return payload.text;
 }

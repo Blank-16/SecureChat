@@ -1,50 +1,58 @@
 import {
-  importPublicKey,
-  encrypt,
-  decrypt,
-  decryptRSA,
+  signData,
+  encryptRatchet,
+  decryptRatchet,
+  encryptECIES,
+  decryptECIES,
+  generateGroupMasterKey,
+  encryptGroupMessage,
+  decryptGroupMessage
 } from "../utils/crypto";
 import { useCryptoStore } from "../store/cryptoStore";
 
 interface UseEncryptionReturn {
-  publicKeyB64: string | null;
-  encryptFor: (
-    plaintext: string,
-    recipientPublicKeyB64: string,
-  ) => Promise<string>;
-  decryptOwn: (ciphertext: string) => Promise<string>;
-  decryptChallenge: (ciphertextB64: string) => Promise<string>;
+  identityPublicKeyB64: string | null;
+  preKeyPublicB64: string | null;
+  preKeySignature: string | null;
+  signChallenge: (nonceStr: string) => Promise<string>;
+  encryptRatchet: typeof encryptRatchet;
+  decryptRatchet: typeof decryptRatchet;
+  encryptECIES: typeof encryptECIES;
+  decryptECIES: typeof decryptECIES;
+  generateGroupMasterKey: typeof generateGroupMasterKey;
+  encryptGroupMessage: (text: string, gmk: string) => Promise<string>;
+  decryptGroupMessage: typeof decryptGroupMessage;
   ready: boolean;
   initialize: (passphrase: string) => Promise<void>;
   clearKeys: () => void;
 }
 
 export function useEncryption(): UseEncryptionReturn {
-  const { publicKeyB64, privateKey, ready, initialize, clear } = useCryptoStore();
+  const { identityPublicKeyB64, preKeyPublicB64, preKeySignature, identityPrivateKey, ready, initialize, clear } = useCryptoStore();
 
-  async function encryptFor(
-    plaintext: string,
-    recipientPublicKeyB64: string,
-  ): Promise<string> {
-    const recipientKey = await importPublicKey(recipientPublicKeyB64);
-    return encrypt(plaintext, recipientKey);
+  async function signChallenge(nonceStr: string): Promise<string> {
+    if (!identityPrivateKey) throw new Error("keys not ready");
+    return signData(identityPrivateKey, new TextEncoder().encode(nonceStr));
   }
 
-  async function decryptOwn(ciphertext: string): Promise<string> {
-    if (!privateKey) throw new Error("keys not ready");
-    return decrypt(ciphertext, privateKey);
-  }
-
-  async function decryptChallenge(ciphertextB64: string): Promise<string> {
-    if (!privateKey) throw new Error("keys not ready");
-    return decryptRSA(ciphertextB64, privateKey);
-  }
+  
+  const encryptGroupMessageWrapper = async (text: string, gmk: string) => {
+    if (!identityPrivateKey) throw new Error("Identity key not ready");
+    return await encryptGroupMessage(text, gmk, identityPrivateKey);
+  };
 
   return {
-    publicKeyB64,
-    encryptFor,
-    decryptOwn,
-    decryptChallenge,
+    identityPublicKeyB64,
+    preKeyPublicB64,
+    preKeySignature,
+    signChallenge,
+    encryptRatchet,
+    decryptRatchet,
+    encryptECIES,
+    decryptECIES,
+    generateGroupMasterKey,
+    encryptGroupMessage: encryptGroupMessageWrapper,
+    decryptGroupMessage,
     ready,
     initialize,
     clearKeys: clear,

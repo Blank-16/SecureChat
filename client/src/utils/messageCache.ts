@@ -33,17 +33,16 @@ function getDB(): Promise<IDBDatabase> {
 }
 
 export async function cacheMessage(peer: string, msg: Message): Promise<void> {
-  // Only cache fully decrypted messages or verified errors
-  if (msg.plaintext === undefined && !msg.decryptError) return;
-  
   try {
     const db = await getDB();
     const tx = db.transaction(STORE_NAME, "readwrite");
     const store = tx.objectStore(STORE_NAME);
     
-    // We store the message along with the peer key to query easily later
+    // Strip plaintext for security (store ciphertext only)
+    const { plaintext, decryptError, ...secureMsg } = msg;
+
     store.put({
-      ...msg,
+      ...secureMsg,
       peer,
     });
   } catch (err) {
