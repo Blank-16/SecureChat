@@ -3,6 +3,7 @@ import { useEncryption } from "./useEncryption";
 import { useWebSocket } from "./useWebSocket";
 import { useAuthStore } from "../store/authStore";
 import { useChatStore, nextOptimisticId } from "../store/chatStore";
+import { useContactsStore } from "../store/contactsStore";
 import type { Message } from "../types";
 import { cacheMessage, getCachedMessages, clearCache } from "../utils/messageCache";
 
@@ -129,6 +130,57 @@ export function useChat(authenticated: boolean) {
     });
   }, [decryptAndStore]);
 
+  const selectGroup = useCallback(async (groupId: number) => {
+    const groupKey = "group:" + groupId;
+    const cached = await getCachedMessages(groupKey);
+    if (cached.length > 0) {
+      useChatStore.getState().setHistory(groupKey, cached);
+    }
+    ws.requestGroupHistory(groupId);
+  }, [ws]);
+
+  const sendGroupMessage = useCallback(async (groupId: number, text: string): Promise<boolean> => {
+    if (!publicKeyB64) return false;
+
+    const group = useContactsStore.getState().groups.find(g => g.id === groupId);
+    if (!group) return false;
+
+    const groupKey = "group:" + groupId;
+    const optimisticId = nextOptimisticId();
+    const self = useAuthStore.getState().username;
+    if (!self) return false;
+
+    const optimistic: Message = {
+      id: optimisticId,
+      from: self,
+      to: groupKey,
+      ciphertext: "",
+      plaintext: text,
+      timestamp: new Date().toISOString(),
+      sendStatus: "sending",
+    };
+
+    useChatStore.getState().append(groupKey, optimistic);
+
+    try {
+      const envelopes: Record<string, string> = {};
+      await Promise.all(
+        group.members.map(async (username) => {
+          const pk = (username === self) ? publicKeyB64 : await ensurePublicKey(username);
+          if (pk) {
+            envelopes[username] = await encryptFor(text, pk);
+          }
+        })
+      );
+
+      ws.sendGroupMessage(groupId, envelopes);
+      return true;
+    } catch {
+      useChatStore.getState().fail(groupKey, optimisticId);
+      return false;
+    }
+  }, [publicKeyB64, encryptFor, ensurePublicKey, ws]);
+
   return useMemo(() => ({
     ready,
     publicKeyB64,
@@ -136,14 +188,17 @@ export function useChat(authenticated: boolean) {
     wsStatus: ws.status,
     sendMessage,
     selectUser,
+    selectGroup,
     loadHistory,
     decryptAndStore,
+    createGroup: ws.createGroup,
+    sendGroupMessage,
     sendTyping: ws.sendTyping,
     addContact: ws.addContact,
     removeContact: ws.removeContact,
     blockUser: ws.blockUser,
     unblockUser: ws.unblockUser,
     deleteChat: ws.deleteChat,
-  }), [ready, publicKeyB64, ensurePublicKey, ws.status, sendMessage, selectUser, loadHistory, decryptAndStore,
-    ws.sendTyping, ws.addContact, ws.removeContact, ws.blockUser, ws.unblockUser, ws.deleteChat]);
+  }), [ready, publicKeyB64, ensurePublicKey, ws.status, sendMessage, selectUser, selectGroup, loadHistory, decryptAndStore,
+    ws.createGroup, sendGroupMessage, ws.sendTyping, ws.addContact, ws.removeContact, ws.blockUser, ws.unblockUser, ws.deleteChat]);
 }

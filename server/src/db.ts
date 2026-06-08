@@ -69,6 +69,36 @@ db.exec(`
         createdAt TEXT NOT NULL DEFAULT (datetime('now')),
         UNIQUE(blockerId, blockedId)
     );
+
+    CREATE TABLE IF NOT EXISTS groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        creatorId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS group_members (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        groupId INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        userId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        createdAt TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(groupId, userId)
+    );
+
+    CREATE TABLE IF NOT EXISTS group_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        groupId INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        senderId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS group_envelopes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        groupMessageId INTEGER NOT NULL REFERENCES group_messages(id) ON DELETE CASCADE,
+        recipientId INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ciphertext TEXT NOT NULL,
+        UNIQUE(groupMessageId, recipientId)
+    );
 `);
 
 
@@ -333,6 +363,97 @@ export function deleteConversation(userAId: number, userBId: number): void {
     DELETE FROM messages
     WHERE (senderId = ? AND receiverId = ?)
   `).run(userAId, userBId, userBId, userAId);
+}
+
+export interface DbGroup {
+  id: number;
+  name: string;
+  members: string[];
+}
+
+export function createGroup(name: string, creatorId: number, memberUsernames: string[]): DbGroup | null {
+  const transaction = db.transaction(() => {
+    const grp = db.prepare("INSERT INTO groups (name, creatorId) VALUES (?, ?) RETURNING *")
+      .get(name, creatorId) as { id: number, name: string } | undefined;
+    if (!grp) return null;
+
+    db.prepare("INSERT INTO group_members (groupId, userId) VALUES (?, ?)").run(grp.id, creatorId);
+
+    const addMember = db.prepare(`
+      INSERT INTO group_members (groupId, userId)
+      SELECT ?, id FROM users WHERE username = ?
+      ON CONFLICT DO NOTHING
+    `);
+    for (const username of memberUsernames) {
+      addMember.run(grp.id, username);
+    }
+    return grp;
+  });
+
+  const grpResult = transaction();
+  if (!grpResult) return null;
+
+  const members = db.prepare(`
+    SELECT username FROM users u
+    JOIN group_members gm ON u.id = gm.userId
+    WHERE gm.groupId = ?
+  `).all(grpResult.id) as { username: string }[];
+
+  return {
+    id: grpResult.id,
+    name: grpResult.name,
+    members: members.map(m => m.username),
+  };
+}
+
+export function getGroupsForUser(userId: number): DbGroup[] {
+  const grps = db.prepare(`
+    SELECT g.id, g.name FROM groups g
+    JOIN group_members gm ON g.id = gm.groupId
+    WHERE gm.userId = ?
+  `).all(userId) as { id: number, name: string }[];
+
+  return grps.map(g => {
+    const members = db.prepare(`
+      SELECT username FROM users u
+      JOIN group_members gm ON u.id = gm.userId
+      WHERE gm.groupId = ?
+    `).all(g.id) as { username: string }[];
+
+    return {
+      id: g.id,
+      name: g.name,
+      members: members.map(m => m.username),
+    };
+  });
+}
+
+export function saveGroupMessage(groupId: number, senderId: number, envelopes: Record<string, string>): void {
+  const transaction = db.transaction(() => {
+    const msg = db.prepare("INSERT INTO group_messages (groupId, senderId) VALUES (?, ?) RETURNING id")
+      .get(groupId, senderId) as { id: number } | undefined;
+    if (!msg) return;
+
+    const saveEnvelope = db.prepare(`
+      INSERT INTO group_envelopes (groupMessageId, recipientId, ciphertext)
+      SELECT ?, id, ? FROM users WHERE username = ?
+    `);
+    for (const [username, ciphertext] of Object.entries(envelopes)) {
+      saveEnvelope.run(msg.id, ciphertext, username);
+    }
+  });
+  transaction();
+}
+
+export function getGroupHistory(groupId: number, userId: number) {
+  return db.prepare(`
+    SELECT gm.id, u.username as [from], ge.ciphertext, gm.timestamp
+    FROM group_messages gm
+    JOIN users u ON gm.senderId = u.id
+    JOIN group_envelopes ge ON gm.id = ge.groupMessageId
+    WHERE gm.groupId = ? AND ge.recipientId = ?
+    ORDER BY gm.id ASC
+  `).all(groupId, userId) as { id: number, from: string, ciphertext: string, timestamp: string }[];
 }
 
 export { db };

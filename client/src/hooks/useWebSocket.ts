@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import type { ConnectionStatus, ServerEnvelope, Message, User } from "../types";
+import type { ConnectionStatus, ServerEnvelope, Message, User, Group } from "../types";
 import { WS_URL, RECONNECT_DELAY_MS } from "../lib/constants";
 import { useAuthStore } from "../store/authStore";
 import { useChatStore } from "../store/chatStore";
@@ -17,6 +17,10 @@ export interface UseWebSocketReturn {
   sendTyping: (to: string, isTyping: boolean) => void;
   setPublicKeyHandler: (handler: PublicKeyHandler) => void;
   addContact: (username: string) => void;
+  createGroup: (name: string, members: string[]) => void;
+  getGroups: () => void;
+  sendGroupMessage: (groupId: number, envelopes: Record<string, string>) => void;
+  requestGroupHistory: (groupId: number) => void;
   removeContact: (username: string) => void;
   blockUser: (username: string) => void;
   unblockUser: (username: string) => void;
@@ -70,8 +74,14 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           const p = payload as { userId: number; username: string; displayName: string };
           useAuthStore.getState().setAuthenticated(p.username, p.displayName ?? "");
           sendRaw({ type: "get_contacts" });
+          sendRaw({ type: "get_groups" });
           if (activeConversationRef.current) {
-            sendRaw({ type: "get_history", payload: { with: activeConversationRef.current } });
+            if (activeConversationRef.current.startsWith("group:")) {
+              const gid = parseInt(activeConversationRef.current.split(":")[1], 10);
+              sendRaw({ type: "get_group_history", payload: { groupId: gid } });
+            } else {
+              sendRaw({ type: "get_history", payload: { with: activeConversationRef.current } });
+            }
           }
           break;
         }
@@ -132,6 +142,53 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           sendRaw({ type: "get_contacts" });
           break;
         }
+        case "group_created": {
+          const p = payload as unknown as Group;
+          useContactsStore.getState().addGroup(p);
+          break;
+        }
+        case "groups": {
+          const p = payload as unknown as { groups: Group[] };
+          useContactsStore.getState().setGroups(p.groups);
+          break;
+        }
+        case "group_message": {
+          const p = payload as unknown as { groupId: number; from: string; ciphertext: string; timestamp: string };
+          const self = useAuthStore.getState().username;
+          const groupKey = "group:" + p.groupId;
+          const msg: Message = {
+            id: Date.now(),
+            from: p.from,
+            to: groupKey,
+            ciphertext: p.ciphertext,
+            timestamp: p.timestamp,
+          };
+          if (p.from === self) {
+            const msgs = useChatStore.getState().getMessages(groupKey);
+            const pendingMsg = msgs.find(m => m.id < 0 && m.sendStatus === "sending");
+            if (pendingMsg) {
+              msg.plaintext = pendingMsg.plaintext;
+              msg.sendStatus = "send";
+              useChatStore.getState().confirm(groupKey, pendingMsg.id, msg);
+            }
+          } else {
+            useChatStore.getState().append(groupKey, msg);
+            if (useUiStore.getState().selectedGroup !== p.groupId) {
+              useContactsStore.getState().incrementUnread(groupKey);
+            }
+          }
+          break;
+        }
+        case "group_history": {
+          const p = payload as unknown as { groupId: number; messages: Message[] };
+          const groupKey = "group:" + p.groupId;
+          const mappedMessages = p.messages.map(m => ({
+            ...m,
+            to: groupKey,
+          }));
+          useChatStore.getState().setHistory(groupKey, mappedMessages);
+          break;
+        }
         case "error": {
           const p = payload as { message: string };
           if (p.message === "authentication required" || p.message === "invalid session") {
@@ -184,6 +241,16 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
       publicKeyHandlerRef.current = handler;
     },
     addContact: (username) => sendRaw({ type: "add_contact", payload: { username } }),
+    createGroup: (name: string, members: string[]) =>
+      sendRaw({ type: "create_group", payload: { name, members } }),
+    getGroups: () =>
+      sendRaw({ type: "get_groups" }),
+    sendGroupMessage: (groupId: number, envelopes: Record<string, string>) =>
+      sendRaw({ type: "send_group_message", payload: { groupId, envelopes } }),
+    requestGroupHistory: (groupId: number) => {
+      activeConversationRef.current = "group:" + groupId;
+      sendRaw({ type: "get_group_history", payload: { groupId } });
+    },
     removeContact: (username) => sendRaw({ type: "remove_contact", payload: { username } }),
     blockUser: (username) => sendRaw({ type: "block_user", payload: { username } }),
     unblockUser: (username) => sendRaw({ type: "unblock_user", payload: { username } }),

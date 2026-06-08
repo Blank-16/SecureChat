@@ -11,9 +11,11 @@ import { formatTime } from "../lib/formatTime";
 import { AddContactModal } from "./AddContactModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { SafetyNumberModal } from "./SafetyNumberModal";
+import { CreateGroupModal } from "./CreateGroupModal";
 
 type ActiveModal =
   | { kind: "addContact" }
+  | { kind: "createGroup" }
   | { kind: "deleteChat"; peer: string }
   | { kind: "block"; peer: string }
   | { kind: "safetyNumber"; peer: string; peerKey: string; ownKey: string }
@@ -25,10 +27,13 @@ export function ChatDashboard() {
 
   const selectedUser = useUiStore((s) => s.selectedUser);
   const setSelectedUser = useUiStore((s) => s.setSelectedUser);
+  const selectedGroup = useUiStore((s) => s.selectedGroup);
+  const setSelectedGroup = useUiStore((s) => s.setSelectedGroup);
   const mobileMenuOpen = useUiStore((s) => s.mobileMenuOpen);
   const setMobileMenuOpen = useUiStore((s) => s.setMobileMenuOpen);
 
   const contacts = useContactsStore((s) => s.contacts);
+  const groups = useContactsStore((s) => s.groups);
   const unreadCounts = useContactsStore((s) => s.unreadCounts);
   const clearUnread = useContactsStore((s) => s.clearUnread);
 
@@ -40,15 +45,20 @@ export function ChatDashboard() {
     ensurePublicKey,
     sendMessage,
     selectUser,
+    selectGroup,
     loadHistory,
     sendTyping,
     addContact,
+    createGroup,
+    sendGroupMessage,
     blockUser,
     deleteChat,
   } = useChat(true);
 
   const activeMessages = useChatStore(
-    (s) => (selectedUser ? s.conversations[selectedUser] : null)
+    (s) => selectedGroup
+      ? s.conversations["group:" + selectedGroup]
+      : (selectedUser ? s.conversations[selectedUser] : null)
   );
 
   const isPeerTyping = useTypingStore(
@@ -72,6 +82,15 @@ export function ChatDashboard() {
     setMobileMenuOpen(false);
   }
 
+  function handleSelectGroup(groupId: number) {
+    onStop();
+    setSelectedGroup(groupId);
+    const groupKey = "group:" + groupId;
+    clearUnread(groupKey);
+    selectGroup(groupId);
+    setMobileMenuOpen(false);
+  }
+
   useEffect(() => {
     if (selectedUser) {
       loadHistory(selectedUser);
@@ -86,11 +105,18 @@ export function ChatDashboard() {
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
     const cleanText = text.trim();
-    if (!cleanText || !selectedUser) return;
+    if (!cleanText) return;
 
     onStop();
     setText("");
-    const ok = await sendMessage(selectedUser, cleanText);
+
+    let ok = false;
+    if (selectedGroup) {
+      ok = await sendGroupMessage(selectedGroup, cleanText);
+    } else if (selectedUser) {
+      ok = await sendMessage(selectedUser, cleanText);
+    }
+
     if (!ok) {
       setText(cleanText);
       addToast("Failed to send message: encryption keys not ready", "error");
@@ -117,6 +143,12 @@ export function ChatDashboard() {
       {activeModal?.kind === "addContact" && (
         <AddContactModal
           onAdd={(username) => addContact(username)}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+      {activeModal?.kind === "createGroup" && (
+        <CreateGroupModal
+          onCreate={(name, members) => createGroup(name, members)}
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -203,43 +235,99 @@ export function ChatDashboard() {
               />
             </div>
 
-            <div className="flex-1 overflow-y-auto divide-y-2 divide-surface-700/50 bg-surface-800">
-              {filteredContacts.length === 0 ? (
-                <div className="p-6 text-center text-xs text-surface-500 select-none uppercase">
-                  {search ? "No matches found" : "No contacts yet"}
-                </div>
-              ) : (
-                filteredContacts.map((user) => {
-                  const isSelected = selectedUser === user.username;
-                  const unread = unreadCounts[user.username] ?? 0;
-                  return (
-                    <button
-                      key={user.id}
-                      onClick={() => handleSelectPeer(user.username)}
-                      className={`w-full text-left p-4 flex items-center justify-between border-l-4 transition-all hover:bg-surface-700/40 cursor-pointer select-none rounded-none ${
-                        isSelected ? "border-accent bg-surface-700/60" : "border-transparent bg-transparent"
-                      }`}
-                    >
-                      <div className="flex items-center gap-3 min-w-0">
-                        <span className={`w-2.5 h-2.5 shrink-0 border border-black ${user.online ? "bg-emerald-500 shadow-[0_0_4px_0_#10b981]" : "bg-surface-600"}`} />
-                        <div className="flex flex-col truncate">
-                          <span className={`text-sm truncate uppercase tracking-tight ${isSelected ? "font-bold text-white" : "text-surface-300"}`}>
-                            {user.displayName || user.username}
-                          </span>
-                          {user.displayName && user.displayName !== user.username && (
-                            <span className="text-[10px] text-surface-500 truncate uppercase">@{user.username}</span>
-                          )}
+            <div className="flex-1 overflow-y-auto bg-surface-800 flex flex-col">
+              <div className="border-b-2 border-surface-700 bg-surface-850 p-2 text-[10px] font-black tracking-widest text-surface-400 uppercase select-none">
+                [CONTACTS]
+              </div>
+              <div className="divide-y-2 divide-surface-700/50">
+                {filteredContacts.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-surface-500 select-none uppercase">
+                    {search ? "No matches found" : "No contacts yet"}
+                  </div>
+                ) : (
+                  filteredContacts.map((user) => {
+                    const isSelected = selectedUser === user.username;
+                    const unread = unreadCounts[user.username] ?? 0;
+                    return (
+                      <button
+                        key={user.id}
+                        onClick={() => handleSelectPeer(user.username)}
+                        className={`w-full text-left p-4 flex items-center justify-between border-l-4 transition-all hover:bg-surface-700/40 cursor-pointer select-none rounded-none ${
+                          isSelected ? "border-accent bg-surface-700/60" : "border-transparent bg-transparent"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={`w-2.5 h-2.5 shrink-0 border border-black ${user.online ? "bg-emerald-500 shadow-[0_0_4px_0_#10b981]" : "bg-surface-600"}`} />
+                          <div className="flex flex-col truncate">
+                            <span className={`text-sm truncate uppercase tracking-tight ${isSelected ? "font-bold text-white" : "text-surface-300"}`}>
+                              {user.displayName || user.username}
+                            </span>
+                            {user.displayName && user.displayName !== user.username && (
+                              <span className="text-[10px] text-surface-500 truncate uppercase">@{user.username}</span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      {unread > 0 && (
-                        <span className="bg-accent border border-black text-black text-[10px] font-black px-1.5 rounded-none min-w-[20px] text-center select-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
-                          {unread}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })
-              )}
+                        {unread > 0 && (
+                          <span className="bg-accent border border-black text-black text-[10px] font-black px-1.5 rounded-none min-w-[20px] text-center select-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                            {unread}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+
+              <div className="border-t-2 border-b-2 border-surface-700 bg-surface-850 p-2 text-[10px] font-black tracking-widest text-surface-400 uppercase select-none flex justify-between items-center mt-2">
+                <span>[SECURE_GROUPS]</span>
+                <button
+                  onClick={() => setActiveModal({ kind: "createGroup" })}
+                  className="text-[9px] border border-surface-600 bg-surface-900 px-2 py-0.5 hover:text-accent hover:border-accent font-bold cursor-pointer transition-colors"
+                >
+                  + NEW
+                </button>
+              </div>
+              <div className="divide-y-2 divide-surface-700/50 flex-1">
+                {groups.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-surface-500 select-none uppercase">
+                    No secure groups
+                  </div>
+                ) : (
+                  groups.map((group) => {
+                    const isSelected = selectedGroup === group.id;
+                    const groupKey = "group:" + group.id;
+                    const unread = unreadCounts[groupKey] ?? 0;
+                    return (
+                      <button
+                        key={group.id}
+                        onClick={() => handleSelectGroup(group.id)}
+                        className={`w-full text-left p-4 flex items-center justify-between border-l-4 transition-all hover:bg-surface-700/40 cursor-pointer select-none rounded-none ${
+                          isSelected ? "border-accent bg-surface-700/60" : "border-transparent bg-transparent"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <svg className="w-4 h-4 shrink-0 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                          </svg>
+                          <div className="flex flex-col truncate">
+                            <span className={`text-sm truncate uppercase tracking-tight ${isSelected ? "font-bold text-white" : "text-surface-300"}`}>
+                              {group.name}
+                            </span>
+                            <span className="text-[9px] text-surface-500 truncate uppercase">
+                              {group.members.length} members
+                            </span>
+                          </div>
+                        </div>
+                        {unread > 0 && (
+                          <span className="bg-accent border border-black text-black text-[10px] font-black px-1.5 rounded-none min-w-[20px] text-center select-none shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+                            {unread}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
           </div>
 
@@ -258,53 +346,85 @@ export function ChatDashboard() {
                 {mobileMenuOpen ? "CLOSE_ROSTER" : "OPEN_ROSTER"}
               </button>
               <span className="font-bold text-xs uppercase text-accent truncate">
-                {selectedUser ? `PEER: ${selectedUser}` : "SECURE_CHAT"}
+                {selectedGroup
+                  ? `GROUP: ${groups.find(g => g.id === selectedGroup)?.name ?? ""}`
+                  : (selectedUser ? `PEER: ${selectedUser}` : "SECURE_CHAT")}
               </span>
             </div>
 
-            {selectedUser ? (
+            {selectedUser || selectedGroup ? (
               <>
                 <div className="hidden lg:flex p-4 border-b-2 border-surface-600 items-center justify-between bg-surface-800">
                   <div className="flex items-center gap-2">
-                    <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
-                    </svg>
-                    <span className="font-bold text-sm uppercase tracking-tight text-white">{selectedUser}</span>
+                    {selectedGroup ? (
+                      <>
+                        <svg className="w-5 h-5 text-accent shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-bold text-sm uppercase tracking-tight text-white">
+                            {groups.find(g => g.id === selectedGroup)?.name}
+                          </span>
+                          <span className="text-[9px] text-surface-500 uppercase tracking-widest mt-0.5 truncate max-w-lg">
+                            MEMBERS: {groups.find(g => g.id === selectedGroup)?.members.join(", ")}
+                          </span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5 text-accent" fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                        </svg>
+                        <span className="font-bold text-sm uppercase tracking-tight text-white">{selectedUser}</span>
+                      </>
+                    )}
                   </div>
                   <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => setActiveModal({ kind: "deleteChat", peer: selectedUser })}
-                      className="text-[10px] font-bold px-2 py-0.5 border border-surface-600 text-surface-400 hover:text-red-400 hover:border-red-500 uppercase transition-colors cursor-pointer"
-                    >
-                      DELETE_CHAT
-                    </button>
-                    <button
-                      onClick={() => setActiveModal({ kind: "block", peer: selectedUser })}
-                      className="text-[10px] font-bold px-2 py-0.5 border border-surface-600 text-surface-400 hover:text-red-400 hover:border-red-500 uppercase transition-colors cursor-pointer"
-                    >
-                      BLOCK
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!publicKeyB64) return;
-                        const pk = await ensurePublicKey(selectedUser);
-                        if (pk) {
-                          setActiveModal({
-                            kind: "safetyNumber",
-                            peer: selectedUser,
-                            peerKey: pk,
-                            ownKey: publicKeyB64,
-                          });
-                        }
-                      }}
-                      className="bg-emerald-950 hover:bg-emerald-900 border border-emerald-500 text-emerald-400 hover:text-emerald-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded-none flex items-center gap-1 cursor-pointer transition-colors"
-                      title="Verify Safety Numbers"
-                    >
-                      <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-                      </svg>
-                      E2E_VERIFIED
-                    </button>
+                    {selectedUser && (
+                      <>
+                        <button
+                          onClick={() => setActiveModal({ kind: "deleteChat", peer: selectedUser })}
+                          className="text-[10px] font-bold px-2 py-0.5 border border-surface-600 text-surface-400 hover:text-red-400 hover:border-red-500 uppercase transition-colors cursor-pointer"
+                        >
+                          DELETE_CHAT
+                        </button>
+                        <button
+                          onClick={() => setActiveModal({ kind: "block", peer: selectedUser })}
+                          className="text-[10px] font-bold px-2 py-0.5 border border-surface-600 text-surface-400 hover:text-red-400 hover:border-red-500 uppercase transition-colors cursor-pointer"
+                        >
+                          BLOCK
+                        </button>
+                        <button
+                          onClick={async () => {
+                            if (!publicKeyB64) return;
+                            const pk = await ensurePublicKey(selectedUser);
+                            if (pk) {
+                              setActiveModal({
+                                kind: "safetyNumber",
+                                peer: selectedUser,
+                                peerKey: pk,
+                                ownKey: publicKeyB64,
+                              });
+                            }
+                          }}
+                          className="bg-emerald-950 hover:bg-emerald-900 border border-emerald-500 text-emerald-400 hover:text-emerald-300 text-[10px] font-mono font-bold px-2 py-0.5 rounded-none flex items-center gap-1 cursor-pointer transition-colors"
+                          title="Verify Safety Numbers"
+                        >
+                          <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                          </svg>
+                          E2E_VERIFIED
+                        </button>
+                      </>
+                    )}
+                    {selectedGroup && (
+                      <div className="bg-emerald-950 border border-emerald-500 text-emerald-400 text-[10px] font-mono font-bold px-2 py-0.5 rounded-none flex items-center gap-1 select-none">
+                        <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                        </svg>
+                        GROUP_E2EE_ACTIVE
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -381,13 +501,13 @@ export function ChatDashboard() {
                 </div>
 
                 <form onSubmit={handleSend} className="p-4 border-t-2 border-surface-600 bg-surface-850 flex gap-3">
-                  <label htmlFor="message-input" className="sr-only">Message {selectedUser}</label>
+                  <label htmlFor="message-input" className="sr-only">Message {selectedGroup ? "Group" : selectedUser}</label>
                   <input
                     id="message-input"
                     type="text"
                     value={text}
                     onChange={handleInputChange}
-                    placeholder={`MESSAGE_${selectedUser.toUpperCase()}...`}
+                    placeholder={selectedGroup ? "MESSAGE_GROUP..." : `MESSAGE_${(selectedUser ?? "").toUpperCase()}...`}
                     className="flex-1 bg-surface-900 border-2 border-surface-600 px-4 py-3 text-xs font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
                   />
                   <button

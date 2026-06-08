@@ -29,3 +29,20 @@ export interface ServerEnvelope {
   type: string;
   payload: Record<string, unknown>;
 }
+
+export interface Group {
+  id: number;
+  name: string;
+  members: string[];
+}
+
+export interface GroupMessage {
+  id: number;
+  groupId: number;
+  from: string;
+  ciphertext: string;
+  plaintext?: string;
+  timestamp: string;
+  decryptError?: boolean;
+}
+

@@ -19,6 +19,12 @@ import {
   handleUnblockUser
 } from "./ws/handlers/contacts";
 import { handleRequestPublicKey, handleDisconnect } from "./ws/handlers/auth";
+import {
+  handleCreateGroup,
+  handleGetGroups,
+  handleSendGroupMessage,
+  handleGetGroupHistory,
+} from "./ws/handlers/group";
 
 // Extension of WebSocket to track liveness
 interface ExtWebSocket extends WebSocket {
@@ -187,6 +193,24 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
         case "request_public_key":
           if (parsed.payload?.username) {
             handleRequestPublicKey(ws, parsed.payload);
+          }
+          break;
+        case "create_group":
+          if (parsed.payload?.name && Array.isArray(parsed.payload?.members)) {
+            handleCreateGroup(ws, parsed.payload);
+          }
+          break;
+        case "get_groups":
+          handleGetGroups(ws);
+          break;
+        case "send_group_message":
+          if (parsed.payload?.groupId && parsed.payload?.envelopes) {
+            handleSendGroupMessage(ws, parsed.payload);
+          }
+          break;
+        case "get_group_history":
+          if (parsed.payload?.groupId) {
+            handleGetGroupHistory(ws, parsed.payload);
           }
           break;
         default:

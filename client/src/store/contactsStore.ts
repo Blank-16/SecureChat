@@ -1,13 +1,16 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
-import type { User } from "../types";
+import type { User, Group } from "../types";
 
 interface ContactsStore {
   contacts: User[];
   blocked: User[];
+  groups: Group[];
   unreadCounts: Record<string, number>;
   setContacts: (contacts: User[]) => void;
   setBlocked: (blocked: User[]) => void;
+  setGroups: (groups: Group[]) => void;
+  addGroup: (group: Group) => void;
   updateContactStatus: (username: string, online: boolean) => void;
   isBlocked: (username: string) => boolean;
   incrementUnread: (username: string) => void;
@@ -18,6 +21,7 @@ export const useContactsStore = create<ContactsStore>()(
   immer((set, get) => ({
     contacts: [],
     blocked: [],
+    groups: [],
     unreadCounts: {},
 
     setContacts: (contacts) => {
@@ -31,6 +35,14 @@ export const useContactsStore = create<ContactsStore>()(
     },
 
     setBlocked: (blocked) => set((s) => { s.blocked = blocked; }),
+
+    setGroups: (groups) => set((s) => { s.groups = groups; }),
+
+    addGroup: (group) => set((s) => {
+      if (!s.groups.some(g => g.id === group.id)) {
+        s.groups.push(group);
+      }
+    }),
 
     updateContactStatus: (username, online) => {
       set((s) => {
