@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import { RequestPublicKeyPayload } from "../../types/messages";
 import { getUserByUsername } from "../../db";
-import { connections, typingState, send, broadcastToSubscribers, findSocketByUserId } from "./utils";
+import { connections, typingState, send, broadcastToSubscribers, findSocketsByUserId } from "./utils";
 
 // Retrieves the public key for a specific user.
 export function handleRequestPublicKey(
@@ -18,7 +18,9 @@ export function handleRequestPublicKey(
     type: "public_key",
     payload: {
       username: user.username,
-      publicKey: user.publicKey,
+      identityKey: user.identityKey,
+      preKey: user.preKey,
+      preKeySignature: user.preKeySignature,
     },
   });
 }
@@ -33,9 +35,9 @@ export function handleDisconnect(ws: WebSocket): void {
     for (const recipientUsername of activeTyping) {
       const recipient = getUserByUsername(recipientUsername);
       if (!recipient) continue;
-      const recipientSocket = findSocketByUserId(recipient.id);
-      if (recipientSocket) {
-        send(recipientSocket, {
+      const recipientSockets = findSocketsByUserId(recipient.id);
+      for (const s of recipientSockets) {
+        send(s, {
           type: "typing",
           payload: { from: user.username, isTyping: false },
         });
@@ -45,6 +47,11 @@ export function handleDisconnect(ws: WebSocket): void {
   }
 
   connections.delete(ws);
+
+  // If user still has other connected sockets, don't broadcast offline
+  const remainingSockets = findSocketsByUserId(user.userId);
+  if (remainingSockets.length > 0) return;
+
   broadcastToSubscribers(user.userId, {
     type: "user_status",
     payload: { userId: user.userId, username: user.username, displayName: user.displayName, online: false },

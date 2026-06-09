@@ -24,11 +24,12 @@ export function broadcastToSubscribers(targetUserId: number, msg: ServerMessage,
   }
 }
 
-export function findSocketByUserId(userId: number): WebSocket | undefined {
+export function findSocketsByUserId(userId: number): WebSocket[] {
+  const sockets: WebSocket[] = [];
   for (const [ws, user] of connections) {
-    if (user.userId === userId) return ws;
+    if (user.userId === userId) sockets.push(ws);
   }
-  return undefined;
+  return sockets;
 }
 
 export function getOnlineUserIds(): number[] {

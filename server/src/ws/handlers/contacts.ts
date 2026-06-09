@@ -12,7 +12,9 @@ export function handleGetContacts(ws: WebSocket): void {
     id: u.id,
     username: u.username,
     displayName: u.displayName,
-    publicKey: u.publicKey,
+    identityKey: u.identityKey,
+    preKey: u.preKey,
+    preKeySignature: u.preKeySignature,
     online: onlineIds.includes(u.id),
   }));
 
@@ -20,7 +22,9 @@ export function handleGetContacts(ws: WebSocket): void {
     id: u.id,
     username: u.username,
     displayName: u.displayName,
-    publicKey: u.publicKey,
+    identityKey: u.identityKey,
+    preKey: u.preKey,
+    preKeySignature: u.preKeySignature,
     online: false,
   }));
 

@@ -24,6 +24,10 @@ import {
   handleGetGroups,
   handleSendGroupMessage,
   handleGetGroupHistory,
+  handleAddGroupMember,
+  handleRemoveGroupMember,
+  handleRotateGroupKey,
+  handleGetGroupKeys
 } from "./ws/handlers/group";
 
 // Extension of WebSocket to track liveness
@@ -196,7 +200,7 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
           }
           break;
         case "create_group":
-          if (parsed.payload?.name && Array.isArray(parsed.payload?.members)) {
+          if (parsed.payload?.name && parsed.payload?.keys) {
             handleCreateGroup(ws, parsed.payload);
           }
           break;
@@ -204,13 +208,33 @@ export function setupWebSocketServer(wss: WebSocketServer): void {
           handleGetGroups(ws);
           break;
         case "send_group_message":
-          if (parsed.payload?.groupId && parsed.payload?.envelopes) {
+          if (parsed.payload?.groupId && parsed.payload?.ciphertext && parsed.payload?.keyId) {
             handleSendGroupMessage(ws, parsed.payload);
           }
           break;
         case "get_group_history":
           if (parsed.payload?.groupId) {
             handleGetGroupHistory(ws, parsed.payload);
+          }
+          break;
+        case "get_group_keys":
+          if (parsed.payload?.groupId) {
+            handleGetGroupKeys(ws, parsed.payload);
+          }
+          break;
+        case "add_group_member":
+          if (parsed.payload?.groupId && parsed.payload?.username && parsed.payload?.encryptedKey && parsed.payload?.keyId) {
+            handleAddGroupMember(ws, parsed.payload);
+          }
+          break;
+        case "remove_group_member":
+          if (parsed.payload?.groupId && parsed.payload?.username) {
+            handleRemoveGroupMember(ws, parsed.payload);
+          }
+          break;
+        case "rotate_group_key":
+          if (parsed.payload?.groupId && parsed.payload?.keyId && parsed.payload?.keys) {
+            handleRotateGroupKey(ws, parsed.payload);
           }
           break;
         default:

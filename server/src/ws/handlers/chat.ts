@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import { SendMessagePayload, GetHistoryPayload, TypingPayload, DeleteChatPayload } from "../../types/messages";
 import { getUserByUsername, saveMessage, getConversation, isBlocked, deleteConversation } from "../../db";
-import { connections, typingState, send, findSocketByUserId } from "./utils";
+import { connections, typingState, send, findSocketsByUserId } from "./utils";
 
 // Saves and forwards an encrypted message to the recipient.
 export function handleSendMessage(
@@ -51,9 +51,9 @@ export function handleSendMessage(
     },
   });
 
-  const receiverWs = findSocketByUserId(receiver.id);
-  if (receiverWs) {
-    send(receiverWs, {
+  const receiverSockets = findSocketsByUserId(receiver.id);
+  for (const s of receiverSockets) {
+    send(s, {
       type: "message",
       payload: {
         id: saved.id,
@@ -63,6 +63,22 @@ export function handleSendMessage(
         timestamp: saved.timestamp,
       },
     });
+  }
+
+  const senderSockets = findSocketsByUserId(sender.userId);
+  for (const s of senderSockets) {
+    if (s !== ws) {
+      send(s, {
+        type: "message",
+        payload: {
+          id: saved.id,
+          from: sender.username,
+          to: receiver.username,
+          ciphertext: saved.senderCiphertext,
+          timestamp: saved.timestamp,
+        },
+      });
+    }
   }
 }
 
@@ -116,9 +132,9 @@ export function handleTyping(ws: WebSocket, payload: TypingPayload): void {
     typingState.get(ws)?.delete(payload.to);
   }
 
-  const receiverWs = findSocketByUserId(receiver.id);
-  if (receiverWs) {
-    send(receiverWs, {
+  const receiverSockets = findSocketsByUserId(receiver.id);
+  for (const s of receiverSockets) {
+    send(s, {
       type: "typing",
       payload: {
         from: sender.username,
@@ -142,9 +158,9 @@ export function handleDeleteChat(ws: WebSocket, payload: DeleteChatPayload): voi
     payload: { with: receiver.username }
   });
 
-  const receiverWs = findSocketByUserId(receiver.id);
-  if (receiverWs) {
-    send(receiverWs, {
+  const receiverSockets = findSocketsByUserId(receiver.id);
+  for (const s of receiverSockets) {
+    send(s, {
       type: "chat_deleted",
       payload: { with: sender.username }
     });
