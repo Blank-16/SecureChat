@@ -2,7 +2,9 @@ export interface User {
   id: number;
   username: string;
   displayName: string;
-  publicKey: string;
+  identityKey: string;
+  preKey: string;
+  preKeySignature: string;
   online: boolean;
 }
 
@@ -11,10 +13,12 @@ export interface Message {
   from: string;
   to: string;
   ciphertext: string;
+  senderCiphertext?: string;
   plaintext?: string;
   timestamp: string;
   decryptError?: boolean;
   sendStatus?: SendStatus;
+  keyId?: number;
 }
 
 export type SendStatus = "sending" | "send" | "failed";
@@ -41,6 +45,7 @@ export interface GroupMessage {
   groupId: number;
   from: string;
   ciphertext: string;
+  keyId: number;
   plaintext?: string;
   timestamp: string;
   decryptError?: boolean;

@@ -7,7 +7,7 @@ import { useContactsStore } from "../store/contactsStore";
 import { useTypingStore } from "../store/typingStore";
 import { useUiStore } from "../store/uiStore";
 
-export type PublicKeyHandler = (username: string, publicKey: string) => void;
+export type PublicKeyHandler = (username: string, keys: { identityKey: string; preKey: string; preKeySignature: string }) => void;
 
 export interface UseWebSocketReturn {
   status: ConnectionStatus;
@@ -17,9 +17,13 @@ export interface UseWebSocketReturn {
   sendTyping: (to: string, isTyping: boolean) => void;
   setPublicKeyHandler: (handler: PublicKeyHandler) => void;
   addContact: (username: string) => void;
-  createGroup: (name: string, members: string[]) => void;
+  createGroup: (name: string, keys: Record<string, string>) => void;
   getGroups: () => void;
-  sendGroupMessage: (groupId: number, envelopes: Record<string, string>) => void;
+  sendGroupMessage: (groupId: number, ciphertext: string, keyId: number) => void;
+  addGroupMember: (groupId: number, username: string, encryptedKey: string, keyId: number) => void;
+  removeGroupMember: (groupId: number, username: string) => void;
+  rotateGroupKey: (groupId: number, keyId: number, keys: Record<string, string>) => void;
+  requestGroupKeys: (groupId: number) => void;
   requestGroupHistory: (groupId: number) => void;
   removeContact: (username: string) => void;
   blockUser: (username: string) => void;
@@ -127,8 +131,8 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           break;
         }
         case "public_key": {
-          const p = payload as { username: string; publicKey: string };
-          publicKeyHandlerRef.current?.(p.username, p.publicKey);
+          const p = payload as { username: string; identityKey: string; preKey: string; preKeySignature: string };
+          publicKeyHandlerRef.current?.(p.username, { identityKey: p.identityKey, preKey: p.preKey, preKeySignature: p.preKeySignature });
           break;
         }
         case "typing": {
@@ -142,6 +146,22 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           sendRaw({ type: "get_contacts" });
           break;
         }
+        
+        case "group_updated": {
+          const p = payload as unknown as Group;
+          const self = useAuthStore.getState().username;
+          if (self && !p.members.includes(self)) {
+            useContactsStore.getState().removeGroup(p.id);
+          } else {
+            useContactsStore.getState().updateGroup(p);
+          }
+          break;
+        }
+        case "group_keys": {
+          const p = payload as { groupId: number; keys: Array<{ keyId: number, encryptedKey: string }> };
+          useChatStore.getState().setGroupKeys(p.groupId, p.keys);
+          break;
+        }
         case "group_created": {
           const p = payload as unknown as Group;
           useContactsStore.getState().addGroup(p);
@@ -153,15 +173,16 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           break;
         }
         case "group_message": {
-          const p = payload as unknown as { groupId: number; from: string; ciphertext: string; timestamp: string };
+          const p = payload as unknown as { id: number; groupId: number; from: string; ciphertext: string; keyId: number; timestamp: string };
           const self = useAuthStore.getState().username;
           const groupKey = "group:" + p.groupId;
           const msg: Message = {
-            id: Date.now(),
+            id: p.id || Date.now(),
             from: p.from,
             to: groupKey,
             ciphertext: p.ciphertext,
             timestamp: p.timestamp,
+            keyId: p.keyId
           };
           if (p.from === self) {
             const msgs = useChatStore.getState().getMessages(groupKey);
@@ -241,12 +262,16 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
       publicKeyHandlerRef.current = handler;
     },
     addContact: (username) => sendRaw({ type: "add_contact", payload: { username } }),
-    createGroup: (name: string, members: string[]) =>
-      sendRaw({ type: "create_group", payload: { name, members } }),
+    createGroup: (name: string, keys: Record<string, string>) =>
+      sendRaw({ type: "create_group", payload: { name, keys } }),
     getGroups: () =>
       sendRaw({ type: "get_groups" }),
-    sendGroupMessage: (groupId: number, envelopes: Record<string, string>) =>
-      sendRaw({ type: "send_group_message", payload: { groupId, envelopes } }),
+    sendGroupMessage: (groupId: number, ciphertext: string, keyId: number) =>
+      sendRaw({ type: "send_group_message", payload: { groupId, ciphertext, keyId } }),
+    addGroupMember: (groupId, username, encryptedKey, keyId) => sendRaw({ type: "add_group_member", payload: { groupId, username, encryptedKey, keyId } }),
+    removeGroupMember: (groupId, username) => sendRaw({ type: "remove_group_member", payload: { groupId, username } }),
+    rotateGroupKey: (groupId, keyId, keys) => sendRaw({ type: "rotate_group_key", payload: { groupId, keyId, keys } }),
+    requestGroupKeys: (groupId) => sendRaw({ type: "get_group_keys", payload: { groupId } }),
     requestGroupHistory: (groupId: number) => {
       activeConversationRef.current = "group:" + groupId;
       sendRaw({ type: "get_group_history", payload: { groupId } });

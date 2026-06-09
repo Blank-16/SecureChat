@@ -1,6 +1,8 @@
 export interface RegisterPayload {
   username: string;
-  publicKey: string;
+  identityKey: string;
+  preKey: string;
+  preKeySignature: string;
 }
 
 export interface SendMessagePayload {
@@ -53,7 +55,9 @@ export interface UserItem {
   id: number;
   username: string;
   displayName: string;
-  publicKey: string;
+  identityKey: string;
+  preKey: string;
+  preKeySignature: string;
   online: boolean;
 }
 
@@ -71,7 +75,9 @@ export interface UserStatusPayload {
 
 export interface PublicKeyPayload {
   username: string;
-  publicKey: string;
+  identityKey: string;
+  preKey: string;
+  preKeySignature: string;
 }
 
 export interface TypingServerPayload {
@@ -95,12 +101,13 @@ export interface DeleteChatServerPayload { with: string; }
 
 export interface CreateGroupPayload {
   name: string;
-  members: string[];
+  keys: Record<string, string>;
 }
 
 export interface SendGroupMessagePayload {
   groupId: number;
-  envelopes: Record<string, string>;
+  ciphertext: string;
+  keyId: number;
 }
 
 export interface GetGroupHistoryPayload {
@@ -122,9 +129,11 @@ export interface GroupsPayload {
 }
 
 export interface GroupMessagePayload {
+  id: number;
   groupId: number;
   from: string;
   ciphertext: string;
+  keyId: number;
   timestamp: string;
 }
 
@@ -132,6 +141,7 @@ export interface GroupHistoryItem {
   id: number;
   from: string;
   ciphertext: string;
+  keyId: number;
   timestamp: string;
 }
 
@@ -155,7 +165,11 @@ export type ClientMessage =
   | { type: "create_group"; payload: CreateGroupPayload }
   | { type: "get_groups"; payload: Record<string, never> }
   | { type: "send_group_message"; payload: SendGroupMessagePayload }
-  | { type: "get_group_history"; payload: GetGroupHistoryPayload };
+  | { type: "get_group_history"; payload: GetGroupHistoryPayload }
+  | { type: "get_group_keys"; payload: { groupId: number } }
+  | { type: "add_group_member"; payload: { groupId: number, username: string, encryptedKey: string, keyId: number } }
+  | { type: "remove_group_member"; payload: { groupId: number, username: string } }
+  | { type: "rotate_group_key"; payload: { groupId: number, keyId: number, keys: Record<string, string> } };
 
 export type ServerMessage =
   | { type: "registered"; payload: RegisteredPayload }
@@ -171,4 +185,6 @@ export type ServerMessage =
   | { type: "group_created"; payload: GroupCreatedPayload }
   | { type: "groups"; payload: GroupsPayload }
   | { type: "group_message"; payload: GroupMessagePayload }
-  | { type: "group_history"; payload: GroupHistoryPayload };
+  | { type: "group_history"; payload: GroupHistoryPayload }
+  | { type: "group_updated"; payload: GroupCreatedPayload }
+  | { type: "group_keys"; payload: { groupId: number, keys: Array<{ keyId: number, encryptedKey: string }> } };
