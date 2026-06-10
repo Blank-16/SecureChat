@@ -1,20 +1,22 @@
 import { Router, type Request, type Response } from "express";
 import { createUser, getUserByUsername, createSession, deleteSession, getSessionByToken, getUserById, saveChallenge, getChallenge, deleteChallenge } from "../db";
-import { randomUUID, randomBytes, publicEncrypt, constants, createPublicKey, timingSafeEqual } from "crypto";
+import { randomUUID, randomBytes, createPublicKey, verify } from "crypto";
 import { parseCookies, buildSetCookieHeader, buildClearCookieHeader, COOKIE_NAME } from "../cookies";
 
 export const authRouter = Router();
 
 const MAX_DISPLAY_NAME_LEN = 64;
-const MAX_PUBLIC_KEY_LEN = 4096;
+const MAX_KEY_LEN = 4096;
 
 authRouter.post("/register", (req: Request, res: Response) => {
   const username = (req.body?.username as string | undefined)?.trim();
   const displayName = (req.body?.displayName as string | undefined)?.trim();
-  const publicKey = (req.body?.publicKey as string | undefined)?.trim();
+  const identityKey = (req.body?.identityKey as string | undefined)?.trim();
+  const preKey = (req.body?.preKey as string | undefined)?.trim();
+  const preKeySignature = (req.body?.preKeySignature as string | undefined)?.trim();
 
-  if (!username || !displayName || !publicKey) {
-    res.status(400).json({ error: "username, displayName, and publicKey required" });
+  if (!username || !displayName || !identityKey || !preKey || !preKeySignature) {
+    res.status(400).json({ error: "missing fields" });
     return;
   }
   if (!/^[a-zA-Z0-9_-]{2,24}$/.test(username)) {
@@ -25,19 +27,30 @@ authRouter.post("/register", (req: Request, res: Response) => {
     res.status(400).json({ error: `displayName must be at most ${MAX_DISPLAY_NAME_LEN} characters` });
     return;
   }
-  if (publicKey.length > MAX_PUBLIC_KEY_LEN || !/^[A-Za-z0-9+/=]+$/.test(publicKey)) {
-    res.status(400).json({ error: "invalid publicKey format" });
+  if (identityKey.length > MAX_KEY_LEN || preKey.length > MAX_KEY_LEN || preKeySignature.length > MAX_KEY_LEN) {
+    res.status(400).json({ error: "key too long" });
     return;
   }
 
   try {
-    createPublicKey({ key: Buffer.from(publicKey, "base64"), format: "der", type: "spki" });
-  } catch {
-    res.status(400).json({ error: "invalid publicKey: not a valid SPKI key" });
+    const key = createPublicKey({ key: Buffer.from(identityKey, "base64"), format: "der", type: "spki" });
+    // Verify preKey signature
+    const isValidPreKey = verify(
+      "sha256",
+      Buffer.from(preKey, "utf8"),
+      key,
+      Buffer.from(preKeySignature, "base64")
+    );
+    if (!isValidPreKey) {
+      res.status(400).json({ error: "invalid preKey signature" });
+      return;
+    }
+  } catch (err) {
+    res.status(400).json({ error: "invalid identityKey format" });
     return;
   }
 
-  const result = createUser(username, displayName, publicKey);
+  const result = createUser(username, displayName, identityKey, preKey, preKeySignature);
   if (!result.success) {
     if (result.error === "ALREADY_EXISTS") {
       res.status(409).json({ error: "username taken" });
@@ -74,30 +87,16 @@ authRouter.post("/challenge", (req: Request, res: Response) => {
   }
 
   const nonce = randomBytes(32).toString("base64");
-
-  try {
-    const encryptedBuffer = publicEncrypt(
-      {
-        key: createPublicKey({ key: Buffer.from(user.publicKey, "base64"), format: "der", type: "spki" }),
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: "sha256",
-      },
-      Buffer.from(nonce, "utf8")
-    );
-    saveChallenge(username, nonce);
-    res.status(200).json({ encryptedNonce: encryptedBuffer.toString("base64") });
-  } catch (err) {
-    console.error("Challenge generation error:", err);
-    res.status(500).json({ error: "failed to generate challenge" });
-  }
+  saveChallenge(username, nonce);
+  res.status(200).json({ nonce });
 });
 
 authRouter.post("/login", (req: Request, res: Response) => {
   const username = (req.body?.username as string | undefined)?.trim();
-  const decryptedNonce = (req.body?.decryptedNonce as string | undefined)?.trim();
+  const signature = (req.body?.signature as string | undefined)?.trim();
 
-  if (!username || !decryptedNonce) {
-    res.status(400).json({ error: "username and decryptedNonce required" });
+  if (!username || !signature) {
+    res.status(400).json({ error: "username and signature required" });
     return;
   }
 
@@ -115,11 +114,20 @@ authRouter.post("/login", (req: Request, res: Response) => {
 
   deleteChallenge(username);
 
-  const a = Buffer.from(storedNonce);
-  const b = Buffer.from(decryptedNonce);
-  const valid = a.length === b.length && timingSafeEqual(a, b);
-  if (!valid) {
-    res.status(401).json({ error: "invalid challenge response" });
+  try {
+    const key = createPublicKey({ key: Buffer.from(user.identityKey, "base64"), format: "der", type: "spki" });
+    const valid = verify(
+      "sha256",
+      Buffer.from(storedNonce, "utf8"),
+      key,
+      Buffer.from(signature, "base64")
+    );
+    if (!valid) {
+      res.status(401).json({ error: "invalid signature" });
+      return;
+    }
+  } catch (err) {
+    res.status(401).json({ error: "signature verification failed" });
     return;
   }
 
