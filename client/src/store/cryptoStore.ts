@@ -1,9 +1,12 @@
 import { create } from "zustand";
-import { generateKeyPair, exportPublicKey, persistKeyPair, loadPersistedKeyPair } from "../utils/crypto";
+import { generateIdentityKeyPair, generatePreKeyPair, exportPublicKey, persistKeyPairs, loadPersistedKeyPairs } from "../utils/crypto";
 
 interface CryptoState {
-  publicKeyB64: string | null;
-  privateKey: CryptoKey | null;
+  identityPublicKeyB64: string | null;
+  identityPrivateKey: CryptoKey | null;
+  preKeyPublicB64: string | null;
+  preKeyPrivateKey: CryptoKey | null;
+  preKeySignature: string | null;
   ready: boolean;
   initializing: boolean;
   initialize: (passphrase: string) => Promise<void>;
@@ -11,8 +14,11 @@ interface CryptoState {
 }
 
 export const useCryptoStore = create<CryptoState>()((set, get) => ({
-  publicKeyB64: null,
-  privateKey: null,
+  identityPublicKeyB64: null,
+  identityPrivateKey: null,
+  preKeyPublicB64: null,
+  preKeyPrivateKey: null,
+  preKeySignature: null,
   ready: false,
   initializing: false,
 
@@ -20,13 +26,27 @@ export const useCryptoStore = create<CryptoState>()((set, get) => ({
     if (get().initializing) return;
     set({ initializing: true });
     try {
-      let pair = await loadPersistedKeyPair(passphrase);
-      if (!pair) {
-        pair = await generateKeyPair();
-        await persistKeyPair(pair, passphrase);
+      let data = await loadPersistedKeyPairs(passphrase);
+      if (!data) {
+        const idPair = await generateIdentityKeyPair();
+        const prePair = await generatePreKeyPair();
+        await persistKeyPairs(idPair, prePair, passphrase);
+        data = await loadPersistedKeyPairs(passphrase);
       }
-      const pubB64 = await exportPublicKey(pair.publicKey);
-      set({ privateKey: pair.privateKey, publicKeyB64: pubB64, ready: true, initializing: false });
+      if (!data) throw new Error("Failed to load key pairs");
+      
+      const identityPubB64 = await exportPublicKey(data.identityKeyPair.publicKey);
+      const preKeyPubB64 = await exportPublicKey(data.preKeyPair.publicKey);
+      
+      set({ 
+        identityPrivateKey: data.identityKeyPair.privateKey, 
+        identityPublicKeyB64: identityPubB64, 
+        preKeyPrivateKey: data.preKeyPair.privateKey,
+        preKeyPublicB64: preKeyPubB64,
+        preKeySignature: data.preKeySignature,
+        ready: true, 
+        initializing: false 
+      });
     } catch (err) {
       set({ initializing: false });
       throw err;
@@ -34,6 +54,14 @@ export const useCryptoStore = create<CryptoState>()((set, get) => ({
   },
 
   clear: () => {
-    set({ privateKey: null, publicKeyB64: null, ready: false, initializing: false });
+    set({ 
+      identityPrivateKey: null, 
+      identityPublicKeyB64: null, 
+      preKeyPrivateKey: null,
+      preKeyPublicB64: null,
+      preKeySignature: null,
+      ready: false, 
+      initializing: false 
+    });
   },
 }));

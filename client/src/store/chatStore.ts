@@ -20,6 +20,8 @@ interface ChatStore {
   fail: (peer: string, optimisticId: number) => void;
   setDecrypted: (peer: string, messageId: number, plaintext: string, decryptError: boolean) => void;
   getMessages: (peer: string) => Message[];
+  groupKeys: Record<number, Array<{ keyId: number, encryptedKey: string }>>;
+  setGroupKeys: (groupId: number, keys: Array<{ keyId: number, encryptedKey: string }>) => void;
   clearAll: () => void;
 }
 
@@ -76,9 +78,18 @@ export const useChatStore = create<ChatStore>()(
 
     getMessages: (peer) => get().conversations[peer] ?? [],
 
+    groupKeys: {},
+
+    setGroupKeys: (groupId, keys) => {
+      set((s) => {
+        s.groupKeys[groupId] = keys;
+      });
+    },
+
     clearAll: () => {
       set((s) => {
         s.conversations = {};
+        s.groupKeys = {};
       });
       resetOptimisticIdCounter();
     },

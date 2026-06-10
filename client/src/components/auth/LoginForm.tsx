@@ -11,7 +11,7 @@ interface LoginFormProps {
 }
 
 export function LoginForm({ onLoading, loading }: LoginFormProps) {
-  const { initialize, decryptChallenge } = useEncryption();
+  const { initialize, signChallenge } = useEncryption();
   const { addToast } = useToastStore();
   const [username, setUsername] = useState("");
   const [passphrase, setPassphrase] = useState("");
@@ -42,19 +42,19 @@ export function LoginForm({ onLoading, loading }: LoginFormProps) {
         throw new Error(errData.error ?? "Failed to initiate login");
       }
 
-      const { encryptedNonce } = await challengeRes.json() as { encryptedNonce: string };
+      const { nonce } = await challengeRes.json() as { nonce: string };
 
       addToast("Unlocking local keys...", "info");
       await initialize(passphrase);
 
       addToast("Solving challenge...", "info");
-      const decryptedNonce = await decryptChallenge(encryptedNonce);
+      const signature = await signChallenge(nonce);
 
       addToast("Submitting proof...", "info");
       const loginRes = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: cleanUsername, decryptedNonce }),
+        body: JSON.stringify({ username: cleanUsername, signature }),
         credentials: "include",
       });
 

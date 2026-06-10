@@ -11,6 +11,8 @@ interface ContactsStore {
   setBlocked: (blocked: User[]) => void;
   setGroups: (groups: Group[]) => void;
   addGroup: (group: Group) => void;
+  updateGroup: (group: Group) => void;
+  removeGroup: (groupId: number) => void;
   updateContactStatus: (username: string, online: boolean) => void;
   isBlocked: (username: string) => boolean;
   incrementUnread: (username: string) => void;
@@ -42,6 +44,17 @@ export const useContactsStore = create<ContactsStore>()(
       if (!s.groups.some(g => g.id === group.id)) {
         s.groups.push(group);
       }
+    }),
+
+    updateGroup: (group) => set((s) => {
+      const idx = s.groups.findIndex(g => g.id === group.id);
+      if (idx !== -1) {
+        s.groups[idx] = group;
+      }
+    }),
+
+    removeGroup: (groupId) => set((s) => {
+      s.groups = s.groups.filter(g => g.id !== groupId);
     }),
 
     updateContactStatus: (username, online) => {

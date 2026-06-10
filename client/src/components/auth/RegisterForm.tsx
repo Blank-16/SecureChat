@@ -43,14 +43,16 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
       addToast("Generating keypair...", "info");
       await initialize(passphrase);
 
-      const pubKeyB64 = useCryptoStore.getState().publicKeyB64;
-      if (!pubKeyB64) throw new Error("Failed to export public key");
+      const identityPubB64 = useCryptoStore.getState().identityPublicKeyB64;
+      const preKeyPubB64 = useCryptoStore.getState().preKeyPublicB64;
+      const preKeySig = useCryptoStore.getState().preKeySignature;
+      if (!identityPubB64 || !preKeyPubB64 || !preKeySig) throw new Error("Failed to export public keys");
 
       addToast("Registering with server...", "info");
       const res = await fetch(`${API_URL}/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: cleanUsername, displayName: cleanDisplayName, publicKey: pubKeyB64 }),
+        body: JSON.stringify({ username: cleanUsername, displayName: cleanDisplayName, identityKey: identityPubB64, preKey: preKeyPubB64, preKeySignature: preKeySig }),
         credentials: "include",
       });
 

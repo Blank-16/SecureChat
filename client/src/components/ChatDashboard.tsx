@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useChat } from "../hooks/useChat";
+import { useEncryption } from "../hooks/useEncryption";
 import { useTypingDebounce } from "../hooks/useTypingDebounce";
 import { useAuthStore } from "../store/authStore";
 import { useChatStore } from "../store/chatStore";
@@ -12,10 +13,12 @@ import { AddContactModal } from "./AddContactModal";
 import { ConfirmModal } from "./ConfirmModal";
 import { SafetyNumberModal } from "./SafetyNumberModal";
 import { CreateGroupModal } from "./CreateGroupModal";
+import { ManageGroupModal } from "./ManageGroupModal";
 
 type ActiveModal =
   | { kind: "addContact" }
   | { kind: "createGroup" }
+  | { kind: "manageGroup"; groupId: number }
   | { kind: "deleteChat"; peer: string }
   | { kind: "block"; peer: string }
   | { kind: "safetyNumber"; peer: string; peerKey: string; ownKey: string }
@@ -39,9 +42,10 @@ export function ChatDashboard() {
 
   const { addToast } = useToastStore();
 
+  const { identityPublicKeyB64 } = useEncryption();
+
   const {
-    wsStatus,
-    publicKeyB64,
+    status,
     ensurePublicKey,
     sendMessage,
     selectUser,
@@ -53,12 +57,20 @@ export function ChatDashboard() {
     sendGroupMessage,
     blockUser,
     deleteChat,
+    addGroupMember,
+    removeGroupMember,
+    rotateGroupKey,
   } = useChat(true);
+  const { generateGroupMasterKey, encryptECIES, decryptECIES } = useEncryption();
 
   const activeMessages = useChatStore(
     (s) => selectedGroup
       ? s.conversations["group:" + selectedGroup]
       : (selectedUser ? s.conversations[selectedUser] : null)
+  );
+
+  const activeGroupKeys = useChatStore(
+    (s) => selectedGroup ? s.groupKeys[selectedGroup] : undefined
   );
 
   const isPeerTyping = useTypingStore(
@@ -73,6 +85,82 @@ export function ChatDashboard() {
   const { onInput, onStop } = useTypingDebounce((isTyping) => {
     if (selectedUser) sendTyping(selectedUser, isTyping);
   });
+
+
+  async function handleCreateGroupAsync(name: string, members: string[]) {
+    try {
+      const gmk = await generateGroupMasterKey();
+      const keys: Record<string, string> = {};
+      
+      const allMembers = [...members];
+      if (currentUsername && !allMembers.includes(currentUsername)) {
+        allMembers.push(currentUsername);
+      }
+
+      for (const member of allMembers) {
+        const pubKeys = await ensurePublicKey(member);
+        if (!pubKeys) throw new Error("Could not fetch keys for " + member);
+        const encryptedGmk = await encryptECIES(gmk, pubKeys.preKey);
+        keys[member] = encryptedGmk;
+      }
+      
+      createGroup(name, keys);
+      setActiveModal(null);
+      addToast("Group created securely!", "success");
+    } catch (err) {
+      console.error(err);
+      addToast("Failed to create group", "error");
+    }
+  }
+
+  async function handleAddMemberAsync(groupId: number, username: string) {
+    try {
+      const pubKeys = await ensurePublicKey(username);
+      if (!pubKeys) throw new Error("Could not fetch keys");
+
+      const groupKeyCache = useChatStore.getState().groupKeys[groupId] || [];
+      const latestKey = [...groupKeyCache].sort((a, b) => b.keyId - a.keyId)[0];
+      if (!latestKey) throw new Error("No GMK available");
+
+      const gmkB64 = await decryptECIES(latestKey.encryptedKey);
+      const encryptedGmk = await encryptECIES(gmkB64, pubKeys.preKey);
+
+      addGroupMember(groupId, username, encryptedGmk, latestKey.keyId);
+      addToast("Add request sent", "info");
+    } catch (err) {
+      console.error(err);
+      addToast("Failed to add member", "error");
+    }
+  }
+
+  async function handleRemoveMemberAsync(groupId: number, username: string) {
+    try {
+      removeGroupMember(groupId, username);
+
+      const group = groups.find(g => g.id === groupId);
+      if (!group) return;
+
+      const remainingMembers = group.members.filter(m => m !== username);
+      const newGmk = await generateGroupMasterKey();
+      
+      const groupKeyCache = useChatStore.getState().groupKeys[groupId] || [];
+      const latestKey = [...groupKeyCache].sort((a, b) => b.keyId - a.keyId)[0];
+      const newKeyId = (latestKey?.keyId ?? 0) + 1;
+
+      const keys: Record<string, string> = {};
+      for (const m of remainingMembers) {
+        const pubKeys = await ensurePublicKey(m);
+        if (!pubKeys) continue;
+        keys[m] = await encryptECIES(newGmk, pubKeys.preKey);
+      }
+
+      rotateGroupKey(groupId, newKeyId, keys);
+      addToast("Remove & rotate request sent", "info");
+    } catch (err) {
+      console.error(err);
+      addToast("Failed to remove member", "error");
+    }
+  }
 
   function handleSelectPeer(peer: string) {
     onStop();
@@ -96,7 +184,7 @@ export function ChatDashboard() {
       loadHistory(selectedUser);
       clearUnread(selectedUser);
     }
-  }, [selectedUser, loadHistory, clearUnread]);
+  }, [selectedUser, loadHistory, clearUnread, activeMessages]);
 
   useEffect(() => {
     if (selectedGroup) {
@@ -104,7 +192,13 @@ export function ChatDashboard() {
       loadHistory(groupKey);
       clearUnread(groupKey);
     }
-  }, [selectedGroup, loadHistory, clearUnread]);
+  }, [selectedGroup, loadHistory, clearUnread, activeMessages, activeGroupKeys]);
+
+  useEffect(() => {
+    if (selectedGroup && !groups.some(g => g.id === selectedGroup)) {
+      setSelectedGroup(null);
+    }
+  }, [groups, selectedGroup]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -122,7 +216,10 @@ export function ChatDashboard() {
     if (selectedGroup) {
       ok = await sendGroupMessage(selectedGroup, cleanText);
     } else if (selectedUser) {
-      ok = await sendMessage(selectedUser, cleanText);
+      const keys = await ensurePublicKey(selectedUser);
+      if (keys) {
+        ok = await sendMessage(selectedUser, cleanText);
+      }
     }
 
     if (!ok) {
@@ -154,9 +251,20 @@ export function ChatDashboard() {
           onClose={() => setActiveModal(null)}
         />
       )}
+      
+      {activeModal?.kind === "manageGroup" && (
+        <ManageGroupModal
+          group={groups.find(g => g.id === activeModal.groupId)!}
+          currentUsername={currentUsername!}
+          onAddMember={handleAddMemberAsync}
+          onRemoveMember={handleRemoveMemberAsync}
+          onClose={() => setActiveModal(null)}
+        />
+      )}
+
       {activeModal?.kind === "createGroup" && (
         <CreateGroupModal
-          onCreate={(name, members) => createGroup(name, members)}
+          onCreate={handleCreateGroupAsync}
           onClose={() => setActiveModal(null)}
         />
       )}
@@ -202,7 +310,7 @@ export function ChatDashboard() {
           <div className={`${mobileMenuOpen ? "flex" : "hidden"} lg:flex flex-col w-full lg:w-80 shrink-0 border-r-2 border-surface-600 bg-surface-800 z-30 h-full`}>
             <div className="p-4 border-b-2 border-surface-600 flex justify-between items-center bg-surface-900">
               <div className="flex items-center gap-2">
-                <span className={`w-2.5 h-2.5 rounded-none border border-black ${wsStatus === "connected" ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
+                <span className={`w-2.5 h-2.5 rounded-none border border-black ${status === "connected" ? "bg-emerald-500 animate-pulse" : "bg-red-500"}`} />
                 <span className="font-bold text-sm tracking-tight truncate max-w-[120px] uppercase">{currentUsername}</span>
               </div>
               <div className="flex items-center gap-2">
@@ -404,14 +512,14 @@ export function ChatDashboard() {
                         </button>
                         <button
                           onClick={async () => {
-                            if (!publicKeyB64) return;
-                            const pk = await ensurePublicKey(selectedUser);
-                            if (pk) {
+                            if (!identityPublicKeyB64) return;
+                            const keys = await ensurePublicKey(selectedUser);
+                            if (keys) {
                               setActiveModal({
                                 kind: "safetyNumber",
                                 peer: selectedUser,
-                                peerKey: pk,
-                                ownKey: publicKeyB64,
+                                peerKey: keys.identityKey,
+                                ownKey: identityPublicKeyB64,
                               });
                             }
                           }}
