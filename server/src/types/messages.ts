@@ -13,6 +13,7 @@ export interface SendMessagePayload {
 
 export interface GetHistoryPayload {
   with: string;
+  beforeId?: number;
 }
 
 export interface TypingPayload {
@@ -49,6 +50,7 @@ export interface HistoryMessageItem {
 export interface HistoryPayload {
   with: string;
   messages: HistoryMessageItem[];
+  hasMore: boolean;
 }
 
 export interface UserItem {
@@ -112,6 +114,7 @@ export interface SendGroupMessagePayload {
 
 export interface GetGroupHistoryPayload {
   groupId: number;
+  beforeId?: number;
 }
 
 export interface GroupCreatedPayload {
@@ -148,6 +151,7 @@ export interface GroupHistoryItem {
 export interface GroupHistoryPayload {
   groupId: number;
   messages: GroupHistoryItem[];
+  hasMore: boolean;
 }
 
 export type ClientMessage =
@@ -169,7 +173,7 @@ export type ClientMessage =
   | { type: "get_group_keys"; payload: { groupId: number } }
   | { type: "add_group_member"; payload: { groupId: number, username: string, encryptedKey: string, keyId: number } }
   | { type: "remove_group_member"; payload: { groupId: number, username: string } }
-  | { type: "rotate_group_key"; payload: { groupId: number, keyId: number, keys: Record<string, string> } };
+  | { type: "rotate_group_key"; payload: { groupId: number, keys: Record<string, string> } };
 
 export type ServerMessage =
   | { type: "registered"; payload: RegisteredPayload }

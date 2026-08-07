@@ -15,8 +15,9 @@ export function send(ws: WebSocket, msg: ServerMessage): void {
   }
 }
 
-export function broadcastToSubscribers(targetUserId: number, msg: ServerMessage, exclude?: WebSocket): void {
-  const subscriberIds = new Set(getUsersWhoAdded(targetUserId).map(u => u.id));
+export async function broadcastToSubscribers(targetUserId: number, msg: ServerMessage, exclude?: WebSocket): Promise<void> {
+  const subscribers = await getUsersWhoAdded(targetUserId);
+  const subscriberIds = new Set(subscribers.map(u => u.id));
   for (const [client, user] of connections) {
     if (client !== exclude && subscriberIds.has(user.userId)) {
       send(client, msg);
