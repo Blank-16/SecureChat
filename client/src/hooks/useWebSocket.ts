@@ -22,7 +22,7 @@ export interface UseWebSocketReturn {
   sendGroupMessage: (groupId: number, ciphertext: string, keyId: number) => void;
   addGroupMember: (groupId: number, username: string, encryptedKey: string, keyId: number) => void;
   removeGroupMember: (groupId: number, username: string) => void;
-  rotateGroupKey: (groupId: number, keyId: number, keys: Record<string, string>) => void;
+  rotateGroupKey: (groupId: number, keys: Record<string, string>) => void;
   requestGroupKeys: (groupId: number) => void;
   requestGroupHistory: (groupId: number) => void;
   removeContact: (username: string) => void;
@@ -146,7 +146,6 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
           sendRaw({ type: "get_contacts" });
           break;
         }
-        
         case "group_updated": {
           const p = payload as unknown as Group;
           const self = useAuthStore.getState().username;
@@ -203,10 +202,7 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
         case "group_history": {
           const p = payload as unknown as { groupId: number; messages: Message[] };
           const groupKey = "group:" + p.groupId;
-          const mappedMessages = p.messages.map(m => ({
-            ...m,
-            to: groupKey,
-          }));
+          const mappedMessages = p.messages.map((m) => ({ ...m, to: groupKey }));
           useChatStore.getState().setHistory(groupKey, mappedMessages);
           break;
         }
@@ -270,7 +266,7 @@ export function useWebSocket(authenticated: boolean): UseWebSocketReturn {
       sendRaw({ type: "send_group_message", payload: { groupId, ciphertext, keyId } }),
     addGroupMember: (groupId, username, encryptedKey, keyId) => sendRaw({ type: "add_group_member", payload: { groupId, username, encryptedKey, keyId } }),
     removeGroupMember: (groupId, username) => sendRaw({ type: "remove_group_member", payload: { groupId, username } }),
-    rotateGroupKey: (groupId, keyId, keys) => sendRaw({ type: "rotate_group_key", payload: { groupId, keyId, keys } }),
+    rotateGroupKey: (groupId, keys) => sendRaw({ type: "rotate_group_key", payload: { groupId, keys } }),
     requestGroupKeys: (groupId) => sendRaw({ type: "get_group_keys", payload: { groupId } }),
     requestGroupHistory: (groupId: number) => {
       activeConversationRef.current = "group:" + groupId;

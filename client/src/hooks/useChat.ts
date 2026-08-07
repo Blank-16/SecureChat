@@ -11,7 +11,7 @@ import { cacheMessage, getCachedMessages, clearCache } from "../utils/messageCac
 type KeySet = { identityKey: string; preKey: string; preKeySignature: string };
 
 export function useChat(authenticated: boolean) {
-  const { encryptRatchet, decryptRatchet, encryptECIES, decryptECIES, encryptGroupMessage, decryptGroupMessage, ready } = useEncryption();
+  const { encryptRatchet, decryptRatchet, encryptECIES, decryptECIES, unwrapGroupMasterKey, encryptGroupMessage, decryptGroupMessage, ready } = useEncryption();
   const ws = useWebSocket(authenticated && ready);
 
   const keyCache = useRef<Map<string, KeySet>>(new Map());
@@ -29,7 +29,7 @@ export function useChat(authenticated: boolean) {
       keyCache.current.set(username, keys);
       const resolvers = keyRequests.current.get(username) ?? [];
       keyRequests.current.delete(username);
-      resolvers.forEach(resolve => resolve(keys));
+      resolvers.forEach((resolve) => resolve(keys));
     });
     return () => { ws.setPublicKeyHandler(() => {}); };
   }, [ws]);
@@ -68,26 +68,18 @@ export function useChat(authenticated: boolean) {
     let decryptError = false;
     try {
       const self = useAuthStore.getState().username;
-      
+
       if (peer.startsWith("group:")) {
         const groupId = parseInt(peer.split(":")[1], 10);
-        // It's a group message. We need the sender's public Identity Key and the GMK.
-        
-        // 1. Get GMK
         const groupKeyCache = useChatStore.getState().groupKeys[groupId] || [];
-        const keyData = groupKeyCache.find(k => k.keyId === msg.keyId);
-        if (!keyData) return; // Wait for keys to arrive
-        const gmkB64 = await decryptECIES(keyData.encryptedKey);
-
-        // 2. Get Sender Identity Key
+        const keyData = groupKeyCache.find((k) => k.keyId === msg.keyId);
+        if (!keyData) return;
+        const gmk = await unwrapGroupMasterKey(keyData.encryptedKey);
         const senderKeys = await ensurePublicKey(msg.from);
         if (!senderKeys) throw new Error("Missing sender public keys");
-        
-        plaintext = await decryptGroupMessage(msg.ciphertext, gmkB64, senderKeys.identityKey);
-
+        plaintext = await decryptGroupMessage(msg.ciphertext, gmk, senderKeys.identityKey);
       } else {
         if (msg.from === self) {
-          // It's a 1-on-1 message we sent
           if (!msg.senderCiphertext) throw new Error("No sender ciphertext");
           plaintext = await decryptECIES(msg.senderCiphertext);
         } else {
@@ -100,7 +92,7 @@ export function useChat(authenticated: boolean) {
     }
     useChatStore.getState().setDecrypted(peer, msg.id, plaintext, decryptError);
     void cacheMessage(peer, { ...msg, plaintext, decryptError });
-  }, [decryptRatchet, decryptECIES, decryptGroupMessage, ensurePublicKey]);
+  }, [decryptRatchet, decryptECIES, decryptGroupMessage, unwrapGroupMasterKey, ensurePublicKey]);
 
   const selectUser = useCallback(async (peer: string) => {
     const cached = await getCachedMessages(peer);
@@ -136,14 +128,17 @@ export function useChat(authenticated: boolean) {
     useChatStore.getState().append(to, optimistic);
 
     try {
+      const preKeyPubB64 = useCryptoStore.getState().preKeyPublicB64;
+      if (!preKeyPubB64) throw new Error("PreKey not ready");
+
       const [ciphertext, senderCiphertext] = await Promise.all([
         encryptRatchet(to, text, recipientKeys.identityKey, recipientKeys.preKey, recipientKeys.preKeySignature),
-        encryptECIES(text, useAuthStore.getState().username ? useCryptoStore.getState().preKeyPublicB64! : ""),
+        encryptECIES(text, preKeyPubB64),
       ]);
       ws.sendMessage(to, ciphertext, senderCiphertext);
       return true;
     } catch (err) {
-      console.error("Encryption failed", err);
+      console.error("Encryption failed:", err);
       useChatStore.getState().fail(to, optimisticId);
       return false;
     }
@@ -177,15 +172,14 @@ export function useChat(authenticated: boolean) {
       console.error("No GMKs available for group", groupId);
       return false;
     }
-    
-    // Sort by keyId descending to get latest
+
     const latestKey = [...groupKeyCache].sort((a, b) => b.keyId - a.keyId)[0];
-    
-    let gmkB64 = "";
+
+    let gmk: CryptoKey;
     try {
-      gmkB64 = await decryptECIES(latestKey.encryptedKey);
+      gmk = await unwrapGroupMasterKey(latestKey.encryptedKey);
     } catch (err) {
-      console.error("Failed to decrypt GMK", err);
+      console.error("Failed to decrypt GMK:", err);
       return false;
     }
 
@@ -206,16 +200,15 @@ export function useChat(authenticated: boolean) {
     useChatStore.getState().append(groupKey, optimistic);
 
     try {
-      const ct = await encryptGroupMessage(text, gmkB64);
+      const ct = await encryptGroupMessage(text, gmk);
       ws.sendGroupMessage(groupId, ct, latestKey.keyId);
-      
       return true;
     } catch (err) {
-      console.error("Group encryption failed", err);
+      console.error("Group encryption failed:", err);
       useChatStore.getState().fail(groupKey, optimisticId);
       return false;
     }
-  }, [encryptGroupMessage, decryptECIES, ws]);
+  }, [encryptGroupMessage, unwrapGroupMasterKey, ws]);
 
   return {
     ...ws,
