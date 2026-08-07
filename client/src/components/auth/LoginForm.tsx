@@ -2,19 +2,22 @@ import { useState } from "react";
 import { useEncryption } from "../../hooks/useEncryption";
 import { useToastStore } from "../../store/toastStore";
 import { useAuthStore } from "../../store/authStore";
-import { useCryptoStore } from "../../store/cryptoStore";
+import { useCryptoStore, NoLocalKeysError } from "../../store/cryptoStore";
 import { API_URL } from "../../lib/constants";
+import { CryptoError } from "../../utils/crypto";
 
 interface LoginFormProps {
   onLoading: (isLoading: boolean) => void;
   loading: boolean;
+  onSwitchToRegister?: () => void;
 }
 
-export function LoginForm({ onLoading, loading }: LoginFormProps) {
-  const { initialize, signChallenge } = useEncryption();
+export function LoginForm({ onLoading, loading, onSwitchToRegister }: LoginFormProps) {
+  const { unlock, signChallenge } = useEncryption();
   const { addToast } = useToastStore();
   const [username, setUsername] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const [noKeysOnDevice, setNoKeysOnDevice] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -29,6 +32,7 @@ export function LoginForm({ onLoading, loading }: LoginFormProps) {
     }
 
     onLoading(true);
+    setNoKeysOnDevice(false);
     try {
       addToast("Requesting cryptographic challenge...", "info");
       const challengeRes = await fetch(`${API_URL}/auth/challenge`, {
@@ -45,7 +49,7 @@ export function LoginForm({ onLoading, loading }: LoginFormProps) {
       const { nonce } = await challengeRes.json() as { nonce: string };
 
       addToast("Unlocking local keys...", "info");
-      await initialize(passphrase);
+      await unlock(passphrase);
 
       addToast("Solving challenge...", "info");
       const signature = await signChallenge(nonce);
@@ -69,8 +73,16 @@ export function LoginForm({ onLoading, loading }: LoginFormProps) {
     } catch (err: unknown) {
       console.error(err);
       useCryptoStore.getState().clear();
-      const msg = err instanceof Error ? err.message : "Authentication failed";
-      addToast(msg, "error");
+
+      if (err instanceof NoLocalKeysError) {
+        setNoKeysOnDevice(true);
+        addToast("No keys found on this device — register instead", "error");
+      } else if (err instanceof CryptoError) {
+        addToast("Incorrect passphrase", "error");
+      } else {
+        const msg = err instanceof Error ? err.message : "Authentication failed";
+        addToast(msg, "error");
+      }
     } finally {
       setPassphrase("");
       onLoading(false);
@@ -110,6 +122,24 @@ export function LoginForm({ onLoading, loading }: LoginFormProps) {
           className="w-full bg-surface-900 border-2 border-surface-600 px-4 py-3 text-sm font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
         />
       </div>
+
+      {noKeysOnDevice && (
+        <div className="border-2 border-amber-500 bg-amber-950/40 p-3 text-xs text-amber-300 space-y-2">
+          <p className="font-bold uppercase tracking-wider">No keys found on this device</p>
+          <p className="text-amber-400/80">
+            This browser has no local key material for this account. If this is a new device, register to generate fresh keys instead.
+          </p>
+          {onSwitchToRegister && (
+            <button
+              type="button"
+              onClick={onSwitchToRegister}
+              className="text-amber-300 underline underline-offset-2 font-bold cursor-pointer hover:text-amber-200"
+            >
+              Switch to register
+            </button>
+          )}
+        </div>
+      )}
 
       <button
         type="submit"

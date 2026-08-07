@@ -4,6 +4,7 @@ import { useToastStore } from "../../store/toastStore";
 import { useAuthStore } from "../../store/authStore";
 import { useCryptoStore } from "../../store/cryptoStore";
 import { API_URL } from "../../lib/constants";
+import { scorePassphrase, MIN_ACCEPTABLE_SCORE } from "../../utils/passphraseStrength";
 
 interface RegisterFormProps {
   onLoading: (isLoading: boolean) => void;
@@ -16,6 +17,7 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [passphrase, setPassphrase] = useState("");
+  const strength = scorePassphrase(passphrase);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -35,6 +37,10 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
     }
     if (passphrase.length < 6) {
       addToast("Passphrase must be at least 6 characters", "error");
+      return;
+    }
+    if (strength.score < MIN_ACCEPTABLE_SCORE) {
+      addToast("Passphrase too weak — add length or mix character types", "error");
       return;
     }
 
@@ -123,6 +129,32 @@ export function RegisterForm({ onLoading, loading }: RegisterFormProps) {
           autoComplete="new-password"
           className="w-full bg-surface-900 border-2 border-surface-600 px-4 py-3 text-sm font-semibold focus:outline-none focus:border-accent rounded-none transition-all placeholder:text-surface-600"
         />
+        {passphrase.length > 0 && (
+          <div className="mt-2 space-y-1">
+            <div className="flex gap-1" role="meter" aria-label="Passphrase strength" aria-valuenow={strength.score} aria-valuemin={0} aria-valuemax={4}>
+              {([0, 1, 2, 3] as const).map((i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 flex-1 border border-black ${
+                    i < strength.score
+                      ? strength.score <= 1
+                        ? "bg-red-500"
+                        : strength.score === 2
+                          ? "bg-amber-500"
+                          : "bg-emerald-500"
+                      : "bg-surface-700"
+                  }`}
+                />
+              ))}
+            </div>
+            <p className={`text-[10px] uppercase font-bold tracking-wider ${
+              strength.score <= 1 ? "text-red-400" : strength.score === 2 ? "text-amber-400" : "text-emerald-400"
+            }`}>
+              {strength.label}
+              {strength.score < MIN_ACCEPTABLE_SCORE && " — add length or mix character types"}
+            </p>
+          </div>
+        )}
       </div>
 
       <button
