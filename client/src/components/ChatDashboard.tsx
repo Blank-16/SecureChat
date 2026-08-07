@@ -61,7 +61,7 @@ export function ChatDashboard() {
     removeGroupMember,
     rotateGroupKey,
   } = useChat(true);
-  const { generateGroupMasterKey, encryptECIES, decryptECIES } = useEncryption();
+  const { generateGroupMasterKey, wrapGroupMasterKeyForMember, unwrapGroupMasterKey } = useEncryption();
 
   const activeMessages = useChatStore(
     (s) => selectedGroup
@@ -100,7 +100,7 @@ export function ChatDashboard() {
       for (const member of allMembers) {
         const pubKeys = await ensurePublicKey(member);
         if (!pubKeys) throw new Error("Could not fetch keys for " + member);
-        const encryptedGmk = await encryptECIES(gmk, pubKeys.preKey);
+        const encryptedGmk = await wrapGroupMasterKeyForMember(gmk, pubKeys.preKey);
         keys[member] = encryptedGmk;
       }
       
@@ -122,8 +122,8 @@ export function ChatDashboard() {
       const latestKey = [...groupKeyCache].sort((a, b) => b.keyId - a.keyId)[0];
       if (!latestKey) throw new Error("No GMK available");
 
-      const gmkB64 = await decryptECIES(latestKey.encryptedKey);
-      const encryptedGmk = await encryptECIES(gmkB64, pubKeys.preKey);
+      const gmk = await unwrapGroupMasterKey(latestKey.encryptedKey);
+      const encryptedGmk = await wrapGroupMasterKeyForMember(gmk, pubKeys.preKey);
 
       addGroupMember(groupId, username, encryptedGmk, latestKey.keyId);
       addToast("Add request sent", "info");
@@ -142,19 +142,15 @@ export function ChatDashboard() {
 
       const remainingMembers = group.members.filter(m => m !== username);
       const newGmk = await generateGroupMasterKey();
-      
-      const groupKeyCache = useChatStore.getState().groupKeys[groupId] || [];
-      const latestKey = [...groupKeyCache].sort((a, b) => b.keyId - a.keyId)[0];
-      const newKeyId = (latestKey?.keyId ?? 0) + 1;
 
       const keys: Record<string, string> = {};
       for (const m of remainingMembers) {
         const pubKeys = await ensurePublicKey(m);
         if (!pubKeys) continue;
-        keys[m] = await encryptECIES(newGmk, pubKeys.preKey);
+        keys[m] = await wrapGroupMasterKeyForMember(newGmk, pubKeys.preKey);
       }
 
-      rotateGroupKey(groupId, newKeyId, keys);
+      rotateGroupKey(groupId, keys);
       addToast("Remove & rotate request sent", "info");
     } catch (err) {
       console.error(err);

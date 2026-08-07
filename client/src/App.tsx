@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "./store/authStore";
-import { useCryptoStore } from "./store/cryptoStore";
+import { useCryptoStore, NoLocalKeysError } from "./store/cryptoStore";
 import { useChatStore } from "./store/chatStore";
 import { useEncryption } from "./hooks/useEncryption";
 import { useToastStore } from "./store/toastStore";
@@ -10,12 +10,13 @@ import { LoginForm } from "./components/auth/LoginForm";
 import { ChatDashboard } from "./components/ChatDashboard";
 import { Toaster } from "./components/Toaster";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { CryptoError } from "./utils/crypto";
 
 export function App() {
   const authState = useAuthStore((s) => s.authState);
   const checkSession = useAuthStore((s) => s.checkSession);
   const cryptoReady = useCryptoStore((s) => s.ready);
-  const { initialize } = useEncryption();
+  const { unlock } = useEncryption();
   const { addToast } = useToastStore();
 
   const [unlockPassphrase, setUnlockPassphrase] = useState("");
@@ -43,13 +44,19 @@ export function App() {
     setUnlocking(true);
     try {
       addToast("Decrypting local keys...", "info");
-      await initialize(unlockPassphrase);
+      await unlock(unlockPassphrase);
       setUnlockPassphrase("");
       addToast("Local E2E workspace unlocked", "success");
     } catch (err: unknown) {
       console.error(err);
-      const msg = err instanceof Error ? err.message : "Incorrect passphrase";
-      addToast(msg, "error");
+      if (err instanceof NoLocalKeysError) {
+        addToast("No keys found on this device. Log out and register this device.", "error");
+      } else if (err instanceof CryptoError) {
+        addToast("Incorrect passphrase", "error");
+      } else {
+        const msg = err instanceof Error ? err.message : "Incorrect passphrase";
+        addToast(msg, "error");
+      }
     } finally {
       setUnlocking(false);
     }
@@ -88,7 +95,7 @@ export function App() {
           {isRegistering ? (
             <RegisterForm onLoading={setAuthLoading} loading={authLoading} />
           ) : (
-            <LoginForm onLoading={setAuthLoading} loading={authLoading} />
+            <LoginForm onLoading={setAuthLoading} loading={authLoading} onSwitchToRegister={() => setIsRegistering(true)} />
           )}
         </AuthLayout>
       )}
