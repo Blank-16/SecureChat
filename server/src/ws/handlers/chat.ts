@@ -1,31 +1,32 @@
 import { WebSocket } from "ws";
 import { SendMessagePayload, GetHistoryPayload, TypingPayload, DeleteChatPayload } from "../../types/messages";
-import { getUserByUsername, saveMessage, getConversation, isBlocked, deleteConversation } from "../../db";
+import { getUserByUsername, saveMessage, getConversation, isBlocked, softDeleteConversation } from "../../db";
 import { connections, typingState, send, findSocketsByUserId } from "./utils";
 
+const HISTORY_PAGE_SIZE = 100;
 // Saves and forwards an encrypted message to the recipient.
-export function handleSendMessage(
+export async function handleSendMessage(
   ws: WebSocket,
   payload: SendMessagePayload,
-): void {
+): Promise<void> {
   const sender = connections.get(ws);
   if (!sender) {
     send(ws, { type: "error", payload: { message: "not registered" } });
     return;
   }
 
-  const receiver = getUserByUsername(payload.to);
+  const receiver = await getUserByUsername(payload.to);
   if (!receiver) {
     send(ws, { type: "error", payload: { message: "recipient not found" } });
     return;
   }
 
-  if (isBlocked(receiver.id, sender.userId)) {
+  if (await isBlocked(receiver.id, sender.userId)) {
     send(ws, { type: "error", payload: { message: "recipient unavailable" } });
     return;
   }
 
-  const result = saveMessage(
+  const result = await saveMessage(
     sender.userId,
     receiver.id,
     payload.ciphertext,
@@ -38,7 +39,6 @@ export function handleSendMessage(
   }
 
   const saved = result.data;
-
 
   send(ws, {
     type: "message",
@@ -82,30 +82,36 @@ export function handleSendMessage(
   }
 }
 
-// Retrieves and sends conversation history between two users.
-export function handleGetHistory(
+// Retrieves and sends a page of conversation history.
+// Pass payload.beforeId to page backwards through older messages.
+export async function handleGetHistory(
   ws: WebSocket,
   payload: GetHistoryPayload,
-): void {
+): Promise<void> {
   const user = connections.get(ws);
   if (!user) {
     send(ws, { type: "error", payload: { message: "not registered" } });
     return;
   }
 
-  const other = getUserByUsername(payload.with);
+  const other = await getUserByUsername(payload.with);
   if (!other) {
     send(ws, { type: "error", payload: { message: "user not found" } });
     return;
   }
 
-  const messages = getConversation(user.userId, other.id);
+  // Fetch one extra row to detect whether an older page exists, without
+  // a separate COUNT query.
+  const messages = await getConversation(user.userId, other.id, HISTORY_PAGE_SIZE + 1, payload.beforeId);
+  const hasMore = messages.length > HISTORY_PAGE_SIZE;
+  const page = hasMore ? messages.slice(messages.length - HISTORY_PAGE_SIZE) : messages;
 
   send(ws, {
     type: "history",
     payload: {
       with: payload.with,
-      messages: messages.map((m) => ({
+      hasMore,
+      messages: page.map((m) => ({
         id: m.id,
         from: m.senderId === user.userId ? user.username : payload.with,
         to: m.receiverId === user.userId ? user.username : payload.with,
@@ -117,11 +123,11 @@ export function handleGetHistory(
 }
 
 // Updates and forwards typing status to a recipient.
-export function handleTyping(ws: WebSocket, payload: TypingPayload): void {
+export async function handleTyping(ws: WebSocket, payload: TypingPayload): Promise<void> {
   const sender = connections.get(ws);
   if (!sender) return;
 
-  const receiver = getUserByUsername(payload.to);
+  const receiver = await getUserByUsername(payload.to);
   if (!receiver) return;
 
   if (payload.isTyping) {
@@ -144,25 +150,18 @@ export function handleTyping(ws: WebSocket, payload: TypingPayload): void {
   }
 }
 
-export function handleDeleteChat(ws: WebSocket, payload: DeleteChatPayload): void {
+// Soft-deletes the conversation for the requesting user only.
+export async function handleDeleteChat(ws: WebSocket, payload: DeleteChatPayload): Promise<void> {
   const sender = connections.get(ws);
   if (!sender) return;
 
-  const receiver = getUserByUsername(payload.username);
+  const receiver = await getUserByUsername(payload.username);
   if (!receiver) return;
 
-  deleteConversation(sender.userId, receiver.id);
+  await softDeleteConversation(sender.userId, receiver.id);
 
   send(ws, {
     type: "chat_deleted",
     payload: { with: receiver.username }
   });
-
-  const receiverSockets = findSocketsByUserId(receiver.id);
-  for (const s of receiverSockets) {
-    send(s, {
-      type: "chat_deleted",
-      payload: { with: sender.username }
-    });
-  }
 }

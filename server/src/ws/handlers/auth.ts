@@ -4,11 +4,11 @@ import { getUserByUsername } from "../../db";
 import { connections, typingState, send, broadcastToSubscribers, findSocketsByUserId } from "./utils";
 
 // Retrieves the public key for a specific user.
-export function handleRequestPublicKey(
+export async function handleRequestPublicKey(
   ws: WebSocket,
   payload: RequestPublicKeyPayload,
-): void {
-  const user = getUserByUsername(payload.username);
+): Promise<void> {
+  const user = await getUserByUsername(payload.username);
   if (!user) {
     send(ws, { type: "error", payload: { message: "user not found" } });
     return;
@@ -26,14 +26,14 @@ export function handleRequestPublicKey(
 }
 
 // Cleans up user state and notifies others upon disconnection.
-export function handleDisconnect(ws: WebSocket): void {
+export async function handleDisconnect(ws: WebSocket): Promise<void> {
   const user = connections.get(ws);
   if (!user) return;
 
   const activeTyping = typingState.get(ws);
   if (activeTyping) {
     for (const recipientUsername of activeTyping) {
-      const recipient = getUserByUsername(recipientUsername);
+      const recipient = await getUserByUsername(recipientUsername);
       if (!recipient) continue;
       const recipientSockets = findSocketsByUserId(recipient.id);
       for (const s of recipientSockets) {
@@ -52,7 +52,7 @@ export function handleDisconnect(ws: WebSocket): void {
   const remainingSockets = findSocketsByUserId(user.userId);
   if (remainingSockets.length > 0) return;
 
-  broadcastToSubscribers(user.userId, {
+  await broadcastToSubscribers(user.userId, {
     type: "user_status",
     payload: { userId: user.userId, username: user.username, displayName: user.displayName, online: false },
   });

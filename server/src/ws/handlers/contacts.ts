@@ -3,12 +3,17 @@ import { getContactsForUser, getBlockedUsers, getUserByUsername, addContact, rem
 import { getOnlineUserIds, send, connections } from "./utils";
 import { AddContactPayload, BlockUserPayload } from "../../types/messages";
 
-export function handleGetContacts(ws: WebSocket): void {
+export async function handleGetContacts(ws: WebSocket): Promise<void> {
   const conn = connections.get(ws);
   if (!conn) return;
 
   const onlineIds = getOnlineUserIds();
-  const contacts = getContactsForUser(conn.userId).map((u) => ({
+  const [contactsRaw, blockedRaw] = await Promise.all([
+    getContactsForUser(conn.userId),
+    getBlockedUsers(conn.userId),
+  ]);
+
+  const contacts = contactsRaw.map((u) => ({
     id: u.id,
     username: u.username,
     displayName: u.displayName,
@@ -18,7 +23,7 @@ export function handleGetContacts(ws: WebSocket): void {
     online: onlineIds.includes(u.id),
   }));
 
-  const blocked = getBlockedUsers(conn.userId).map((u) => ({
+  const blocked = blockedRaw.map((u) => ({
     id: u.id,
     username: u.username,
     displayName: u.displayName,
@@ -34,46 +39,46 @@ export function handleGetContacts(ws: WebSocket): void {
   });
 }
 
-export function handleAddContact(ws: WebSocket, payload: AddContactPayload): void {
+export async function handleAddContact(ws: WebSocket, payload: AddContactPayload): Promise<void> {
   const conn = connections.get(ws);
   if (!conn) return;
 
-  const userToAdd = getUserByUsername(payload.username);
+  const userToAdd = await getUserByUsername(payload.username);
   if (!userToAdd || userToAdd.id === conn.userId) return;
 
-  addContact(conn.userId, userToAdd.id);
-  handleGetContacts(ws);
+  await addContact(conn.userId, userToAdd.id);
+  await handleGetContacts(ws);
 }
 
-export function handleRemoveContact(ws: WebSocket, payload: AddContactPayload): void {
+export async function handleRemoveContact(ws: WebSocket, payload: AddContactPayload): Promise<void> {
   const conn = connections.get(ws);
   if (!conn) return;
 
-  const userToRemove = getUserByUsername(payload.username);
+  const userToRemove = await getUserByUsername(payload.username);
   if (!userToRemove) return;
 
-  removeContact(conn.userId, userToRemove.id);
-  handleGetContacts(ws);
+  await removeContact(conn.userId, userToRemove.id);
+  await handleGetContacts(ws);
 }
 
-export function handleBlockUser(ws: WebSocket, payload: BlockUserPayload): void {
+export async function handleBlockUser(ws: WebSocket, payload: BlockUserPayload): Promise<void> {
   const conn = connections.get(ws);
   if (!conn) return;
 
-  const userToBlock = getUserByUsername(payload.username);
+  const userToBlock = await getUserByUsername(payload.username);
   if (!userToBlock) return;
 
-  blockUser(conn.userId, userToBlock.id);
-  handleGetContacts(ws);
+  await blockUser(conn.userId, userToBlock.id);
+  await handleGetContacts(ws);
 }
 
-export function handleUnblockUser(ws: WebSocket, payload: BlockUserPayload): void {
+export async function handleUnblockUser(ws: WebSocket, payload: BlockUserPayload): Promise<void> {
   const conn = connections.get(ws);
   if (!conn) return;
 
-  const userToUnblock = getUserByUsername(payload.username);
+  const userToUnblock = await getUserByUsername(payload.username);
   if (!userToUnblock) return;
 
-  unblockUser(conn.userId, userToUnblock.id);
-  handleGetContacts(ws);
+  await unblockUser(conn.userId, userToUnblock.id);
+  await handleGetContacts(ws);
 }
