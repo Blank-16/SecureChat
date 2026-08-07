@@ -109,6 +109,18 @@ export async function persistKeyPairs(
   });
 }
 
+export async function hasPersistedKeys(): Promise<boolean> {
+  const db = await openDb();
+  const raw = await new Promise<PersistedKeyData | undefined>((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const req = tx.objectStore(IDB_STORE).get(IDB_KEY);
+    req.onsuccess = () => resolve(req.result as PersistedKeyData | undefined);
+    req.onerror = () => reject(new CryptoError("Failed to read key data", { cause: req.error }));
+    tx.oncomplete = () => db.close();
+  });
+  return !!raw;
+}
+
 export async function loadPersistedKeyPairs(
   passphrase: string,
 ): Promise<{ identityKeyPair: CryptoKeyPair, preKeyPair: CryptoKeyPair, preKeySignature: string } | null> {
