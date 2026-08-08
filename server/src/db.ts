@@ -725,18 +725,28 @@ export type RotateGroupKeyResult =
   | { success: true; keyId: number }
   | { success: false };
 
-// keyId is derived server-side to prevent concurrent rotation races.
+// keyId is derived server-side inside a serializable transaction to prevent
+// concurrent rotation races without relying on a separate sequence object.
 export async function rotateGroupKey(
   groupId: number,
   keys: Record<string, string>,
 ): Promise<RotateGroupKeyResult> {
   try {
     return await getSqlClient().begin(async (tx: postgres.TransactionSql) => {
+      // Lock the parent groups row rather than group_keys rows. group_keys is
+      // empty on the very first rotation, so locking it acquires nothing and
+      // two concurrent first-rotations would both compute key_id = 1. The
+      // groups row always exists and serialises all rotations for this group.
+      await tx`
+        SELECT 1 FROM groups
+        WHERE id = ${groupId}
+        FOR UPDATE
+      `;
+
       const [{ next_key_id }] = await tx`
         SELECT COALESCE(MAX(key_id), 0) + 1 AS next_key_id
         FROM group_keys
         WHERE group_id = ${groupId}
-        FOR UPDATE
       `;
       const keyId = next_key_id as number;
 
