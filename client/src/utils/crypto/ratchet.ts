@@ -5,11 +5,23 @@ import { uint8ToBase64, base64ToUint8, toBuffer } from "./helpers";
 // Maximum number of out-of-order message keys cached per session.
 const MAX_SKIP = 100;
 
-// HKDF-based key derivation. Keys are non-extractable by default so raw
-// bytes cannot be exported from the browser by XSS code.
-async function hkdf(ikm: CryptoKey, salt: Uint8Array, info: string, extractable = false): Promise<CryptoKey> {
+/**
+ * One-shot HKDF-SHA256 key derivation.
+ *
+ * Keys are non-extractable by default; the caller must opt in explicitly
+ * (e.g. for skipped-key caching in IndexedDB where structured-clone
+ * requires raw bytes).
+ */
+async function hkdf(
+  ikm: CryptoKey,
+  salt: Uint8Array,
+  info: string,
+  extractable = false,
+): Promise<CryptoKey> {
   const infoBuf = new TextEncoder().encode(info);
 
+  // Re-import so the HKDF algorithm is always in scope regardless of how
+  // `ikm` was originally created.
   const baseKey = await crypto.subtle.importKey(
     "raw",
     await crypto.subtle.exportKey("raw", ikm),
@@ -35,8 +47,7 @@ async function hkdf(ikm: CryptoKey, salt: Uint8Array, info: string, extractable 
 interface SkippedKeyEntry {
   index: number;
   // Raw exported message key (base64). Message keys are single-use and
-  // short-lived, so brief extractability here is an acceptable tradeoff
-  // for IndexedDB persistence of out-of-order messages.
+  // short-lived; brief extractability is acceptable for IndexedDB persistence.
   keyB64: string;
 }
 
@@ -101,11 +112,22 @@ export async function clearAllSessions(): Promise<void> {
   });
 }
 
+/**
+ * Derives the shared secret from an ECDH key exchange and sets up the
+ * symmetric ratchet chain keys.
+ *
+ * The `sessionSalt` parameter MUST be the same value on both sides.
+ * The initiator generates it and transmits it in the first message payload
+ * alongside their ephemeral public key. The responder reads it from that
+ * payload and passes it here. This is safe because the salt is not secret —
+ * RFC 5869 §3.1 explicitly states that the salt may be public.
+ */
 export async function initializeSession(
   peerUsername: string,
   myEphemeralPriv: CryptoKey,
   peerPreKeyPub: CryptoKey,
   isInitiator: boolean,
+  sessionSalt: Uint8Array,
 ): Promise<void> {
   const sharedSecretBits = await crypto.subtle.deriveBits(
     { name: ECDH_ALGORITHM, public: peerPreKeyPub },
@@ -120,9 +142,6 @@ export async function initializeSession(
     false,
     ["deriveKey"],
   );
-
-  // Random per-session salt (RFC 5869 recommends random salt over a fixed string).
-  const sessionSalt = crypto.getRandomValues(new Uint8Array(32));
 
   const rootKey = await hkdf(sharedSecret, sessionSalt, "RootKey");
   const aliceChain = await hkdf(rootKey, sessionSalt, "AliceChain");
@@ -159,8 +178,11 @@ export async function ratchetSendKey(peerUsername: string): Promise<RatchetSendR
   return { messageKey, msgIndex };
 }
 
-// Advances the receive chain to targetIndex, caching skipped message keys
-// so out-of-order messages can still be decrypted. Bounded by MAX_SKIP.
+/**
+ * Advances the receive chain to `targetIndex`, caching skipped message keys
+ * so out-of-order messages can still be decrypted. Bounded by MAX_SKIP to
+ * prevent unbounded memory growth from a malicious or buggy sender.
+ */
 export async function ratchetReceiveKey(peerUsername: string, targetIndex: number): Promise<CryptoKey> {
   const session = await getSession(peerUsername);
   if (!session) throw new CryptoError("Session not initialized");
