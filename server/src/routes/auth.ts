@@ -1,12 +1,17 @@
 import { Router, type Request, type Response } from "express";
 import { createUser, getUserByUsername, createSession, deleteSession, getSessionByToken, getUserById, saveChallenge, getChallenge, deleteChallenge } from "../db";
-import { randomBytes, createPublicKey, verify } from "crypto";
+import { randomBytes, createPublicKey, verify, generateKeyPairSync } from "crypto";
 import { parseCookies, buildSetCookieHeader, buildClearCookieHeader, COOKIE_NAME } from "../cookies";
 
 export const authRouter = Router();
 
 const MAX_DISPLAY_NAME_LEN = 64;
 const MAX_KEY_LEN = 4096;
+
+// Pre-generated once at startup. Used by the dummy verification path in /login
+// to ensure the CPU cost of the false branch matches the real branch, preventing
+// a timing side-channel that would expose whether a username is registered.
+const { publicKey: DUMMY_VERIFY_KEY } = generateKeyPairSync("ec", { namedCurve: "P-256" });
 
 // 256-bit session token, hashed before storage (see db.ts).
 function generateSessionToken(): string {
@@ -105,34 +110,48 @@ authRouter.post("/login", async (req: Request, res: Response) => {
     return;
   }
 
-  const user = await getUserByUsername(username);
-  if (!user) {
+  const [user, storedNonce] = await Promise.all([
+    getUserByUsername(username),
+    getChallenge(username),
+  ]);
+
+  // Consume the nonce immediately regardless of outcome. A challenge must be
+  // single-use; leaving it in the table on a failed attempt would allow an
+  // attacker to make unlimited signature-brute-force attempts against one nonce.
+  if (storedNonce) await deleteChallenge(username);
+
+  // Always execute signature verification, even for unknown users or expired
+  // challenges. DUMMY_VERIFY_KEY is a valid P-256 key so verify() actually runs
+  // and takes comparable CPU time to the real path, closing the timing oracle.
+  let verified = false;
+  try {
+    if (user && storedNonce) {
+      const key = createPublicKey({ key: Buffer.from(user.identityKey, "base64"), format: "der", type: "spki" });
+      verified = verify(
+        "sha256",
+        Buffer.from(storedNonce, "utf8"),
+        key,
+        Buffer.from(signature, "base64"),
+      );
+    } else {
+      // Run a real ECDSA verify against the pre-generated dummy key so the
+      // branch takes the same CPU time as a legitimate failed verification.
+      verify("sha256", randomBytes(32), DUMMY_VERIFY_KEY, Buffer.from(signature, "base64"));
+    }
+  } catch {
+    // Swallow errors from the dummy path (signature format mismatch) and from
+    // malformed real requests — all resolve to the same 401 below.
+  }
+
+  if (!verified) {
     res.status(401).json({ error: "invalid credentials" });
     return;
   }
 
-  const storedNonce = await getChallenge(username);
-  if (!storedNonce) {
-    res.status(401).json({ error: "challenge expired or not found" });
-    return;
-  }
-
-  await deleteChallenge(username);
-
-  try {
-    const key = createPublicKey({ key: Buffer.from(user.identityKey, "base64"), format: "der", type: "spki" });
-    const valid = verify(
-      "sha256",
-      Buffer.from(storedNonce, "utf8"),
-      key,
-      Buffer.from(signature, "base64")
-    );
-    if (!valid) {
-      res.status(401).json({ error: "invalid signature" });
-      return;
-    }
-  } catch {
-    res.status(401).json({ error: "signature verification failed" });
+  // `verified` is only true when `user && storedNonce` held, so `user` is
+  // always defined here. The guard satisfies TypeScript's narrowing.
+  if (!user) {
+    res.status(401).json({ error: "invalid credentials" });
     return;
   }
 
